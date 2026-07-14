@@ -1,36 +1,45 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# WeMoot MVP
 
-## Getting Started
+Asistente conversacional para crear y gestionar eventos de fútbol. Incluye dashboard privado, creación manual, bot de Telegram, parser con OpenAI, inscritos, pagos manuales, copy social, CSV y preparación de certificados.
 
-First, run the development server:
+## Puesta en marcha
+
+1. Crea un proyecto en Supabase y ejecuta `supabase/migrations/001_initial_schema.sql` en el SQL Editor.
+2. Copia `.env.example` a `.env.local` y completa las variables. Usa la nueva
+   publishable key (`sb_publishable_...`) en el cliente y la secret key
+   (`sb_secret_...`) exclusivamente en el servidor.
+3. Ejecuta `npm run dev` y abre `http://localhost:3000`.
+4. Registra una cuenta desde `/login`.
+
+## Configurar Telegram
+
+1. Crea un bot con BotFather y guarda el token en `TELEGRAM_BOT_TOKEN`.
+2. Define un valor aleatorio largo en `TELEGRAM_WEBHOOK_SECRET`.
+3. Con la app desplegada en HTTPS, registra el webhook:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://TU-DOMINIO/api/telegram/webhook","secret_token":"TU_SECRETO"}'
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+El usuario debe crear primero su cuenta web. Al escribir `/start`, el bot solicitará el email para vincular de forma segura el chat con ese perfil.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Claves de Supabase
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- `NEXT_PUBLIC_SUPABASE_URL`: URL pública del proyecto.
+- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`: clave pública usada por Auth y por las operaciones protegidas con RLS.
+- `SUPABASE_SECRET_KEY`: clave privada, utilizada únicamente por el webhook de Telegram para sus operaciones administrativas. Nunca debe llevar el prefijo `NEXT_PUBLIC_`.
 
-## Learn More
+No se necesita `SUPABASE_JWKS_URL` en esta aplicación. El SDK de Supabase
+valida y renueva las sesiones mediante `auth.getUser()`. La URL JWKS solo sería
+necesaria si en el futuro verificamos los JWT localmente con una librería como
+`jose`; se deriva como
+`<NEXT_PUBLIC_SUPABASE_URL>/auth/v1/.well-known/jwks.json`.
 
-To learn more about Next.js, take a look at the following resources:
+## Decisiones del MVP
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- No existen páginas públicas de eventos.
+- Los pagos son manuales; la tabla `payments` permite integrar Stripe después.
+- “Preparar certificados” crea registros pendientes. La generación PDF queda desacoplada para una siguiente iteración.
+- Sin `OPENAI_API_KEY`, la creación web sigue funcionando con copy básico; el parser conversacional necesita OpenAI para extraer todos los datos.
