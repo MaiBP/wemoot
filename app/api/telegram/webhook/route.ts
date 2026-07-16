@@ -173,7 +173,7 @@ export async function POST(request: Request) {
         .eq("telegram_chat_id", chatId);
       await sendTelegramMessage(
         chatId,
-        `✅ Evento publicado.\nPuedes gestionarlo desde:\n${process.env.NEXT_PUBLIC_APP_URL}/dashboard/events/${event.id}`,
+        `✅ Evento publicado.\n\nGestionar evento:\n${process.env.NEXT_PUBLIC_APP_URL}/dashboard/events/${event.id}\n\nEnlace de inscripción para participantes:\n${process.env.NEXT_PUBLIC_APP_URL}/events/${event.slug}/register`,
       );
       return NextResponse.json({ ok: true });
     }

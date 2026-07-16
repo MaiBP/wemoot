@@ -25,3 +25,8 @@ export const registrationSchema = z.object({
 
 export const paymentUpdateSchema = z.object({ registration_id: z.uuid(), status: z.enum(["pending", "paid", "cancelled"]) });
 
+export const publicRegistrationSchema = registrationSchema.extend({
+  participant_email: z.email(),
+  payment_method: z.enum(["cash", "card"]),
+  website: z.string().max(0).optional(),
+});

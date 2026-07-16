@@ -146,9 +146,9 @@ export default async function EventDetailPage({
           </Card>
           <Card>
             <CardContent>
-              <p className="text-sm font-medium">Enlace interno</p>
+              <p className="text-sm font-medium">Enlace de inscripción</p>
               <CopyBox
-                text={`${process.env.NEXT_PUBLIC_APP_URL}/dashboard/events/${event.id}`}
+                text={`${process.env.NEXT_PUBLIC_APP_URL}/events/${event.slug}/register`}
               />
             </CardContent>
           </Card>
