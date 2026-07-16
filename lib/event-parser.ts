@@ -1,25 +1,29 @@
 import { z } from "zod";
 import { getOpenAI } from "@/lib/openai";
 import type { ParsedEvent } from "@/types/event";
-const parsedSchema = z.object({
-  intent: z.enum(["create_event", "list_events", "help", "unknown"]),
-  event: z.object({
-    title: z.string().optional(),
-    event_type: z.string().optional(),
-    description: z.string().nullable().optional(),
-    city: z.string().optional(),
-    location: z.string().nullable().optional(),
-    start_date: z.string().optional(),
-    end_date: z.string().optional(),
-    schedule: z.string().nullable().optional(),
-    age_range: z.string().nullable().optional(),
-    price: z.number().optional(),
-    capacity: z.number().int().optional(),
-  }),
-  missing_fields: z.array(z.string()),
-  social_copy: z.string(),
-  whatsapp_message: z.string(),
+
+const eventDataSchema = z.object({
+  title: z.string().optional(),
+  event_type: z.string().optional(),
+  description: z.string().nullable().optional(),
+  city: z.string().optional(),
+  location: z.string().nullable().optional(),
+  start_date: z.string().optional(),
+  end_date: z.string().optional(),
+  schedule: z.string().nullable().optional(),
+  age_range: z.string().nullable().optional(),
+  price: z.coerce.number().optional(),
+  capacity: z.coerce.number().int().optional(),
 });
+
+const aiResponseSchema = z.object({
+  intent: z.string().default("unknown"),
+  event: eventDataSchema.default({}),
+  missing_fields: z.array(z.string()).default([]),
+  social_copy: z.string().default(""),
+  whatsapp_message: z.string().default(""),
+});
+
 const required = [
   "title",
   "event_type",
@@ -29,6 +33,7 @@ const required = [
   "price",
   "capacity",
 ] as const;
+
 function fallback(text: string): ParsedEvent {
   const lower = text.toLowerCase();
   return {
@@ -47,11 +52,42 @@ function fallback(text: string): ParsedEvent {
     whatsapp_message: "",
   };
 }
+
+function normalizeIntent(
+  intent: string,
+  hasExistingEvent: boolean,
+): ParsedEvent["intent"] {
+  if (intent === "list_events" || intent === "help") return intent;
+  if (intent === "create_event" || hasExistingEvent) return "create_event";
+  return "unknown";
+}
+
+export function normalizeParsedEvent(
+  raw: unknown,
+  existing: Record<string, unknown> = {},
+): ParsedEvent {
+  const parsed = aiResponseSchema.parse(raw);
+  const event = eventDataSchema.parse({ ...existing, ...parsed.event });
+  const missingFields = required.filter((field) => {
+    const value = event[field];
+    return value === undefined || value === null || value === "";
+  });
+
+  return {
+    intent: normalizeIntent(parsed.intent, Object.keys(existing).length > 0),
+    event,
+    missing_fields: missingFields,
+    social_copy: parsed.social_copy,
+    whatsapp_message: parsed.whatsapp_message,
+  };
+}
+
 export async function parseEventMessage(
   message: string,
   existing: Record<string, unknown> = {},
 ): Promise<ParsedEvent> {
   if (!process.env.OPENAI_API_KEY) return fallback(message);
+
   const openai = getOpenAI();
   const response = await openai.chat.completions.create({
     model: "gpt-4.1-mini",
@@ -60,7 +96,7 @@ export async function parseEventMessage(
     messages: [
       {
         role: "system",
-        content: `Eres el parser de WeMoot. Interpreta mensajes en español o inglés sobre eventos de fútbol. Fecha actual: ${new Date().toISOString().slice(0, 10)}. Devuelve SOLO JSON con intent, event, missing_fields, social_copy, whatsapp_message. Fechas YYYY-MM-DD. Campos mínimos: ${required.join(", ")}. Conserva y combina los datos existentes. No inventes datos factuales. Genera copy solo cuando haya datos suficientes.`,
+        content: `Eres el parser de WeMoot. Interpreta mensajes en español o inglés sobre eventos de fútbol. Fecha actual: ${new Date().toISOString().slice(0, 10)}. Devuelve SOLO JSON con intent, event, missing_fields, social_copy, whatsapp_message. Usa intent "create_event" también cuando el usuario esté completando o corrigiendo un evento en curso. Fechas YYYY-MM-DD. Campos mínimos: ${required.join(", ")}. Conserva y combina los datos existentes. No inventes datos factuales. Genera copy solo cuando haya datos suficientes.`,
       },
       {
         role: "user",
@@ -71,16 +107,11 @@ export async function parseEventMessage(
       },
     ],
   });
+
   const raw = JSON.parse(response.choices[0]?.message.content ?? "{}");
-  const result = parsedSchema.parse(raw);
-  result.missing_fields = required.filter(
-    (field) =>
-      result.event[field] === undefined ||
-      result.event[field] === null ||
-      result.event[field] === "",
-  );
-  return result;
+  return normalizeParsedEvent(raw, existing);
 }
+
 export async function generateMarketingCopy(event: {
   title: string;
   city: string;
@@ -91,6 +122,7 @@ export async function generateMarketingCopy(event: {
   description?: string | null;
 }) {
   if (!process.env.OPENAI_API_KEY) throw new Error("OpenAI no configurado");
+
   const openai = getOpenAI();
   const response = await openai.chat.completions.create({
     model: "gpt-4.1-mini",
@@ -105,6 +137,7 @@ export async function generateMarketingCopy(event: {
       { role: "user", content: JSON.stringify(event) },
     ],
   });
+
   return z
     .object({ social_copy: z.string(), whatsapp_message: z.string() })
     .parse(JSON.parse(response.choices[0]?.message.content ?? "{}"));
