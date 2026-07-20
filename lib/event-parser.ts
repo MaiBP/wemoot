@@ -1,4 +1,5 @@
 import type OpenAI from "openai";
+import { zodResponseFormat } from "openai/helpers/zod";
 import { z } from "zod";
 import { getOpenAI } from "@/lib/openai";
 import { advancedEventDraftSchema } from "@/lib/validations";
@@ -22,14 +23,60 @@ const eventDataSchema = z.object({
   contact_phone: z.string().nullable().optional(),
 });
 
+const aiEventDataSchema = z.object({
+  title: z.string().nullable(),
+  event_type: z.string().nullable(),
+  description: z.string().nullable(),
+  city: z.string().nullable(),
+  location: z.string().nullable(),
+  start_date: z.string().nullable(),
+  end_date: z.string().nullable(),
+  schedule: z.string().nullable(),
+  age_range: z.string().nullable(),
+  price: z.number().nullable(),
+  capacity: z.number().int().nullable(),
+  organizer_name: z.string().nullable(),
+  contact_email: z.string().nullable(),
+  contact_phone: z.string().nullable(),
+});
+
+const aiAdvancedSchema = z.object({
+  programs: z.array(z.object({
+    name: z.string(),
+    turn: z.enum(["morning", "afternoon", "full_day", "custom"]),
+    description: z.string().nullable(),
+    start_time: z.string().nullable(),
+    end_time: z.string().nullable(),
+    min_age: z.number().int().nullable(),
+    max_age: z.number().int().nullable(),
+    capacity: z.number().int().nullable(),
+    payment_timing: z.enum(["immediate", "reserve", "deferred"]),
+    payment_due_date: z.string().nullable(),
+    included_items: z.array(z.string()),
+  })),
+  periods: z.array(z.object({
+    label: z.string(),
+    start_date: z.string(),
+    end_date: z.string(),
+  })),
+  prices: z.array(z.object({
+    program_name: z.string(),
+    period_label: z.string().nullable(),
+    label: z.string(),
+    audience: z.enum(["all", "member", "non_member"]),
+    amount: z.number(),
+  })),
+  uncertainties: z.array(z.string()),
+});
+
 const aiResponseSchema = z.object({
-  intent: z.string().default("unknown"),
-  event: eventDataSchema.default({}),
-  missing_fields: z.array(z.string()).default([]),
-  social_copy: z.string().default(""),
-  whatsapp_message: z.string().default(""),
-  event_mode: z.enum(["simple", "advanced"]).optional(),
-  advanced: advancedEventDraftSchema.optional(),
+  intent: z.enum(["create_event", "list_events", "help", "unknown"]),
+  event: aiEventDataSchema,
+  missing_fields: z.array(z.string()),
+  social_copy: z.string(),
+  whatsapp_message: z.string(),
+  event_mode: z.enum(["simple", "advanced"]),
+  advanced: aiAdvancedSchema,
 });
 
 const required = [
@@ -102,7 +149,10 @@ export function normalizeParsedEvent(
   existing: Record<string, unknown> = {},
 ): ParsedEvent {
   const parsed = aiResponseSchema.parse(raw);
-  const event = eventDataSchema.parse({ ...existing, ...parsed.event });
+  const knownEventValues = Object.fromEntries(
+    Object.entries(parsed.event).filter(([, value]) => value !== null),
+  );
+  const event = eventDataSchema.parse({ ...existing, ...knownEventValues });
   const previousAdvanced = advancedEventDraftSchema
     .catch(emptyAdvanced)
     .parse(existing.advanced);
@@ -181,10 +231,10 @@ export async function parseEventMessage(
         ]
       : userPayload,
   };
-  const response = await openai.chat.completions.create({
+  const response = await openai.chat.completions.parse({
     model: "gpt-4.1-mini",
     temperature: 0.2,
-    response_format: { type: "json_object" },
+    response_format: zodResponseFormat(aiResponseSchema, "wemoot_event_draft"),
     messages: [
       {
         role: "system",
@@ -194,8 +244,9 @@ export async function parseEventMessage(
     ],
   });
 
-  const raw = JSON.parse(response.choices[0]?.message.content ?? "{}");
-  return normalizeParsedEvent(raw, existing);
+  const parsed = response.choices[0]?.message.parsed;
+  if (!parsed) throw new Error("OpenAI no devolvió un borrador estructurado");
+  return normalizeParsedEvent(parsed, existing);
 }
 
 export async function generateMarketingCopy(event: {
