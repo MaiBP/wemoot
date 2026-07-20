@@ -6,6 +6,7 @@ export default async function RegistrationSuccessPage({ searchParams }: { search
   const { method, session_id: sessionId } = await searchParams;
   const cash = method === "cash";
   const free = method === "free";
+  const reserve = method === "reserve";
   let cardPaid = false;
   if (sessionId?.startsWith("cs_")) {
     try {
@@ -15,7 +16,7 @@ export default async function RegistrationSuccessPage({ searchParams }: { search
       cardPaid = false;
     }
   }
-  const confirmed = cash || free || cardPaid;
+  const confirmed = cash || free || reserve || cardPaid;
   return (
     <main className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top,rgba(2,169,234,.18),transparent_40%)] px-4">
       <Card className="w-full max-w-lg text-center">
@@ -24,7 +25,7 @@ export default async function RegistrationSuccessPage({ searchParams }: { search
           <CheckCircle2 className="mx-auto size-14 text-brand-cyan" />
           <p className="mt-5 text-3xl font-black">{confirmed ? "¡Inscripción completada!" : "Estamos confirmando tu pago"}</p>
           <p className="mt-3 leading-6 text-brand-black/60">
-            {cash ? "Tu plaza está reservada. Recuerda realizar el pago en efectivo al organizador." : free ? "Tu plaza ha quedado reservada correctamente." : cardPaid ? "Tu pago se ha procesado y tu plaza ha quedado reservada." : "Stripe está procesando la operación. El organizador verá el estado actualizado automáticamente cuando se confirme."}
+            {cash ? "Tu plaza está reservada. Recuerda realizar el pago en efectivo al organizador." : free ? "Tu plaza ha quedado reservada correctamente." : reserve ? "Hemos recibido tu solicitud. El organizador confirmará la plaza y te indicará cuándo realizar el pago." : cardPaid ? "Tu pago se ha procesado y tu plaza ha quedado reservada." : "Stripe está procesando la operación. El organizador verá el estado actualizado automáticamente cuando se confirme."}
           </p>
           <p className="mt-8 text-2xl font-black">We<span className="text-brand-cyan">Moot</span></p>
         </CardContent>

@@ -2,8 +2,17 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { parseEventMessage } from "@/lib/event-parser";
 import { createSlug } from "@/lib/slug";
-import { eventSchema } from "@/lib/validations";
-import { sendTelegramMessage, type TelegramUpdate } from "@/lib/telegram";
+import {
+  advancedEventBaseSchema,
+  advancedEventDraftSchema,
+  eventSchema,
+} from "@/lib/validations";
+import {
+  getTelegramImageDataUrl,
+  sendTelegramMessage,
+  type TelegramUpdate,
+} from "@/lib/telegram";
+import type { AdvancedEventDraft } from "@/types/event";
 const fieldNames: Record<string, string> = {
   title: "nombre",
   event_type: "tipo",
@@ -15,7 +24,79 @@ const fieldNames: Record<string, string> = {
   location: "ubicación exacta",
   schedule: "horario",
 };
-const yes = /^(sí|si|yes|publica|publícalo|publicar)$/i;
+const yes = /^(sí|si|yes|publica|publícalo|publicar|confirmar|guardar borrador)$/i;
+
+async function saveAdvancedStructure(
+  admin: ReturnType<typeof createAdminClient>,
+  eventId: string,
+  draft: AdvancedEventDraft,
+) {
+  const { data: programs, error: programsError } = draft.programs.length
+    ? await admin
+        .from("event_programs")
+        .insert(
+          draft.programs.map((program, position) => ({
+            event_id: eventId,
+            name: program.name,
+            turn: program.turn ?? "custom",
+            description: program.description ?? null,
+            start_time: program.start_time ?? null,
+            end_time: program.end_time ?? null,
+            min_age: program.min_age ?? null,
+            max_age: program.max_age ?? null,
+            capacity: program.capacity ?? 1,
+            payment_timing: program.payment_timing ?? "immediate",
+            payment_due_date: program.payment_due_date ?? null,
+            included_items: program.included_items ?? [],
+            position,
+          })),
+        )
+        .select("id,name")
+    : { data: [], error: null };
+  if (programsError) throw programsError;
+
+  const { data: periods, error: periodsError } = draft.periods.length
+    ? await admin
+        .from("event_periods")
+        .insert(
+          draft.periods.map((period, position) => ({
+            event_id: eventId,
+            ...period,
+            position,
+          })),
+        )
+        .select("id,label")
+    : { data: [], error: null };
+  if (periodsError) throw periodsError;
+
+  const programIds = new Map(
+    (programs ?? []).map((program) => [program.name.toLowerCase(), program.id]),
+  );
+  const periodIds = new Map(
+    (periods ?? []).map((period) => [period.label.toLowerCase(), period.id]),
+  );
+  const prices = draft.prices.flatMap((price, position) => {
+    const programId = programIds.get(price.program_name.toLowerCase());
+    if (!programId) return [];
+    return [
+      {
+        event_id: eventId,
+        program_id: programId,
+        period_id: price.period_label
+          ? (periodIds.get(price.period_label.toLowerCase()) ?? null)
+          : null,
+        label: price.label,
+        audience: price.audience,
+        amount: price.amount,
+        position,
+      },
+    ];
+  });
+  if (prices.length) {
+    const { error } = await admin.from("event_prices").insert(prices);
+    if (error) throw error;
+  }
+}
 export async function POST(request: Request) {
   const secret = request.headers.get("x-telegram-bot-api-secret-token");
   if (
@@ -25,11 +106,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   const update = (await request.json()) as TelegramUpdate;
   const message = update.message;
-  if (!message?.text) return NextResponse.json({ ok: true });
+  if (!message || (!message.text && !message.caption && !message.photo && !message.document)) {
+    return NextResponse.json({ ok: true });
+  }
   const chatId = String(message.chat.id);
-  const text = message.text.trim().slice(0, 4000);
+  const text = (message.text ?? message.caption ?? "Importar este cartel como borrador de evento avanzado")
+    .trim()
+    .slice(0, 4000);
   const admin = createAdminClient();
   try {
+    const imageDataUrl = await getTelegramImageDataUrl(message);
     const { data: account } = await admin
       .from("telegram_accounts")
       .select("*, profiles(*)")
@@ -128,8 +214,24 @@ export async function POST(request: Request) {
           .select()
           .single()
       ).data;
+    if (state?.current_flow === "awaiting_confirmation" && /^cancelar$/i.test(text)) {
+      await admin
+        .from("conversation_states")
+        .update({ current_flow: null, collected_data: {}, missing_fields: [] })
+        .eq("telegram_chat_id", chatId);
+      await sendTelegramMessage(chatId, "Borrador descartado. Puedes comenzar otro evento cuando quieras.");
+      return NextResponse.json({ ok: true });
+    }
     if (state?.current_flow === "awaiting_confirmation" && yes.test(text)) {
-      const parsed = eventSchema.safeParse(state.collected_data);
+      const collectedData = state.collected_data as Record<string, unknown>;
+      const advancedDraft = advancedEventDraftSchema
+        .catch({ programs: [], periods: [], prices: [], uncertainties: [] })
+        .parse(collectedData.advanced);
+      const isAdvanced =
+        collectedData.event_mode === "advanced" || advancedDraft.programs.length > 0;
+      const parsed = isAdvanced
+        ? advancedEventBaseSchema.safeParse(collectedData)
+        : eventSchema.safeParse(collectedData);
       if (!parsed.success) {
         await sendTelegramMessage(
           chatId,
@@ -145,16 +247,27 @@ export async function POST(request: Request) {
           .eq("telegram_chat_id", chatId);
         return NextResponse.json({ ok: true });
       }
-      const copy = state.collected_data as Record<string, unknown>;
+      const copy = collectedData;
+      const minimumPrice = advancedDraft.prices.length
+        ? Math.min(...advancedDraft.prices.map((price) => price.amount))
+        : 0;
+      const totalCapacity = advancedDraft.programs.reduce(
+        (total, program) => total + (program.capacity ?? 0),
+        0,
+      );
+      const saveOnly = /^guardar borrador$/i.test(text);
       const { data: event, error } = await admin
         .from("events")
         .insert({
           ...parsed.data,
+          price: isAdvanced ? minimumPrice : (parsed.data as { price: number }).price,
+          capacity: isAdvanced ? Math.max(totalCapacity, 1) : (parsed.data as { capacity: number }).capacity,
+          ...(isAdvanced ? { event_mode: "advanced" } : {}),
           owner_id: profileId,
           organization_id: null,
           slug: createSlug(parsed.data.title),
           payment_mode: "manual",
-          status: "published",
+          status: isAdvanced || saveOnly ? "draft" : "published",
           social_copy: String(copy.social_copy ?? ""),
           whatsapp_message: String(copy.whatsapp_message ?? ""),
           created_from: "telegram",
@@ -162,6 +275,14 @@ export async function POST(request: Request) {
         .select()
         .single();
       if (error) throw error;
+      if (isAdvanced) {
+        try {
+          await saveAdvancedStructure(admin, event.id, advancedDraft);
+        } catch (structureError) {
+          await admin.from("events").delete().eq("id", event.id);
+          throw structureError;
+        }
+      }
       await admin
         .from("conversation_states")
         .update({
@@ -173,15 +294,18 @@ export async function POST(request: Request) {
         .eq("telegram_chat_id", chatId);
       await sendTelegramMessage(
         chatId,
-        `✅ Evento publicado.\n\nGestionar evento:\n${process.env.NEXT_PUBLIC_APP_URL}/dashboard/events/${event.id}\n\nEnlace de inscripción para participantes:\n${process.env.NEXT_PUBLIC_APP_URL}/events/${event.slug}/register`,
+        isAdvanced || saveOnly
+          ? `✅ Borrador guardado.\n\nHe creado ${advancedDraft.programs.length} modalidades, ${advancedDraft.periods.length} periodos y ${advancedDraft.prices.length} tarifas. Revísalo antes de publicar:\n${process.env.NEXT_PUBLIC_APP_URL}/dashboard/events/${event.id}`
+          : `✅ Evento publicado.\n\nGestionar evento:\n${process.env.NEXT_PUBLIC_APP_URL}/dashboard/events/${event.id}\n\nEnlace de inscripción para participantes:\n${process.env.NEXT_PUBLIC_APP_URL}/events/${event.slug}/register`,
       );
       return NextResponse.json({ ok: true });
     }
     const existing: Record<string, unknown> =
-      state?.current_flow === "creating_event"
+      state?.current_flow === "creating_event" ||
+      state?.current_flow === "awaiting_confirmation"
         ? (state.collected_data as Record<string, unknown>)
         : {};
-    const parsed = await parseEventMessage(text, existing);
+    const parsed = await parseEventMessage(text, existing, imageDataUrl);
     if (parsed.intent === "unknown") {
       await sendTelegramMessage(
         chatId,
@@ -198,6 +322,8 @@ export async function POST(request: Request) {
       ),
       social_copy: parsed.social_copy || existing.social_copy,
       whatsapp_message: parsed.whatsapp_message || existing.whatsapp_message,
+      event_mode: parsed.event_mode ?? existing.event_mode ?? "simple",
+      advanced: parsed.advanced ?? existing.advanced,
     };
     if (parsed.missing_fields.length) {
       await admin
@@ -212,7 +338,7 @@ export async function POST(request: Request) {
         .eq("telegram_chat_id", chatId);
       await sendTelegramMessage(
         chatId,
-        `Perfecto. Me faltan ${parsed.missing_fields.length} datos:\n${parsed.missing_fields.map((f) => `• ${fieldNames[f] ?? f}`).join("\n")}\n\nPuedes responder en un solo mensaje.`,
+        `${imageDataUrl ? "He analizado el cartel. " : "Perfecto. "}Me faltan ${parsed.missing_fields.length} datos:\n${parsed.missing_fields.map((f) => `• ${fieldNames[f] ?? f}`).join("\n")}\n\nPuedes responder en un solo mensaje${parsed.event_mode === "advanced" ? " o enviar más carteles." : "."}`,
       );
       return NextResponse.json({ ok: true });
     }
@@ -226,9 +352,18 @@ export async function POST(request: Request) {
         updated_at: new Date().toISOString(),
       })
       .eq("telegram_chat_id", chatId);
+    const advanced = advancedEventDraftSchema
+      .catch({ programs: [], periods: [], prices: [], uncertainties: [] })
+      .parse(collected.advanced);
+    const isAdvanced = collected.event_mode === "advanced" || advanced.programs.length > 0;
     await sendTelegramMessage(
       chatId,
-      `Listo. Te preparé este borrador:\n\n${collected.title}\n${collected.start_date} al ${collected.end_date}\n${collected.city}${collected.location ? ` · ${collected.location}` : ""}\n${collected.age_range ? `Edad: ${collected.age_range}\n` : ""}Precio: ${collected.price} €\nPlazas: ${collected.capacity}\n\nTambién preparé el copy para redes y WhatsApp.\n¿Quieres publicarlo ahora?`,
+      isAdvanced
+        ? `Listo. Detecté un campus avanzado:\n\n${collected.title}\n${collected.start_date} al ${collected.end_date}\n${collected.city}${collected.location ? ` · ${collected.location}` : ""}\n\nModalidades: ${advanced.programs.length}\nPeriodos: ${advanced.periods.length}\nTarifas: ${advanced.prices.length}${advanced.uncertainties.length ? `\n\n⚠️ Datos a revisar:\n${advanced.uncertainties.map((item) => `• ${item}`).join("\n")}` : ""}\n\nLo guardaré como borrador para revisar las tablas en el dashboard.`
+        : `Listo. Te preparé este borrador:\n\n${collected.title}\n${collected.start_date} al ${collected.end_date}\n${collected.city}${collected.location ? ` · ${collected.location}` : ""}\n${collected.age_range ? `Edad: ${collected.age_range}\n` : ""}Precio: ${collected.price} €\nPlazas: ${collected.capacity}\n\nTambién preparé el copy para redes y WhatsApp.\n¿Quieres publicarlo ahora?`,
+      isAdvanced
+        ? [["Guardar borrador", "Cancelar"]]
+        : [["Confirmar", "Guardar borrador"], ["Cancelar"]],
     );
     return NextResponse.json({ ok: true });
   } catch (error) {

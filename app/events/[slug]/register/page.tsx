@@ -13,6 +13,14 @@ export default async function RegistrationPage({ params, searchParams }: { param
   if (!event) notFound();
 
   const { count } = await admin.from("registrations").select("id", { count: "exact", head: true }).eq("event_id", event.id).neq("payment_status", "cancelled");
+  const advanced = event.event_mode === "advanced";
+  const [{ data: programs = [] }, { data: periods = [] }, { data: prices = [] }] = advanced
+    ? await Promise.all([
+        admin.from("event_programs").select("*").eq("event_id", event.id).eq("active", true).order("position"),
+        admin.from("event_periods").select("*").eq("event_id", event.id).eq("active", true).order("position"),
+        admin.from("event_prices").select("*").eq("event_id", event.id).eq("active", true).order("position"),
+      ])
+    : [{ data: [] }, { data: [] }, { data: [] }];
   const remaining = Math.max(0, event.capacity - (count ?? 0));
   const price = Number(event.price);
 
@@ -32,10 +40,10 @@ export default async function RegistrationPage({ params, searchParams }: { param
               <p className="flex gap-3"><CalendarDays className="mt-0.5 size-5 shrink-0 text-brand-cyan" /><span><strong className="block">{formatDate(event.start_date)}{event.end_date !== event.start_date ? ` – ${formatDate(event.end_date)}` : ""}</strong><span className="text-sm text-brand-black/55">{event.schedule || "Horario por confirmar"}</span></span></p>
               <p className="flex gap-3"><MapPin className="mt-0.5 size-5 shrink-0 text-brand-magenta" /><span><strong className="block">{event.city}</strong><span className="text-sm text-brand-black/55">{event.location || "Ubicación por confirmar"}</span></span></p>
               <p className="flex gap-3"><Users className="mt-0.5 size-5 shrink-0 text-brand-cyan" /><span><strong className="block">{remaining} plazas disponibles</strong><span className="text-sm text-brand-black/55">{event.age_range || "Todas las edades"}</span></span></p>
-              <p><strong className="block text-xl">{price === 0 ? "Gratuito" : formatCurrency(price)}</strong><span className="text-sm text-brand-black/55">Precio por participante</span></p>
+              <p><strong className="block text-xl">{price === 0 ? "Gratuito" : advanced ? `Desde ${formatCurrency(price)}` : formatCurrency(price)}</strong><span className="text-sm text-brand-black/55">Precio por participante</span></p>
             </div>
             {payment === "cancelled" && <p className="mb-5 rounded-xl bg-brand-yellow/35 p-4 text-sm">El pago con tarjeta se canceló. Tu plaza no se confirmó; puedes intentarlo de nuevo o elegir efectivo.</p>}
-            {remaining > 0 ? <PublicRegistrationForm eventId={event.id} price={price} /> : <div className="rounded-xl bg-brand-yellow/35 p-5 text-center"><strong>El evento está completo</strong><p className="mt-1 text-sm text-brand-black/60">Ya no quedan plazas disponibles.</p></div>}
+            {remaining > 0 ? <PublicRegistrationForm eventId={event.id} price={price} programs={programs ?? []} periods={periods ?? []} prices={prices ?? []} /> : <div className="rounded-xl bg-brand-yellow/35 p-5 text-center"><strong>El evento está completo</strong><p className="mt-1 text-sm text-brand-black/60">Ya no quedan plazas disponibles.</p></div>}
           </CardContent>
         </Card>
       </div>

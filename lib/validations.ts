@@ -29,4 +29,89 @@ export const publicRegistrationSchema = registrationSchema.extend({
   participant_email: z.email(),
   payment_method: z.enum(["cash", "card"]),
   website: z.string().max(0).optional(),
+  program_id: z.uuid().nullable().optional(),
+  period_id: z.uuid().nullable().optional(),
+  price_id: z.uuid().nullable().optional(),
+  participant_birth_date: z.iso.date().nullable().optional(),
+  guardian_name: z.string().trim().max(120).nullable().optional(),
+  club_member: z.boolean().nullable().optional(),
+  current_club: z.string().trim().max(120).nullable().optional(),
+  shirt_size: z.string().trim().max(20).nullable().optional(),
+  allergies: z.string().trim().max(1000).nullable().optional(),
+  medical_notes: z.string().trim().max(1000).nullable().optional(),
+  image_consent: z.boolean().default(false),
+});
+
+export const eventProgramSchema = z.object({
+  id: z.uuid().optional(),
+  name: z.string().trim().min(2).max(120),
+  turn: z.enum(["morning", "afternoon", "full_day", "custom"]).default("custom"),
+  description: z.string().trim().max(1000).nullable().optional(),
+  start_time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
+  end_time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
+  min_age: z.coerce.number().int().min(3).max(100).nullable().optional(),
+  max_age: z.coerce.number().int().min(3).max(100).nullable().optional(),
+  capacity: z.coerce.number().int().positive().max(100000),
+  payment_timing: z.enum(["immediate", "reserve", "deferred"]).default("immediate"),
+  payment_due_date: z.iso.date().nullable().optional(),
+  included_items: z.array(z.string().trim().min(1).max(100)).default([]),
+}).refine((value) => value.max_age == null || value.min_age == null || value.max_age >= value.min_age, {
+  message: "La edad máxima debe ser mayor que la mínima",
+  path: ["max_age"],
+});
+
+export const eventPeriodSchema = z.object({
+  id: z.uuid().optional(),
+  label: z.string().trim().min(2).max(100),
+  start_date: z.iso.date(),
+  end_date: z.iso.date(),
+}).refine((value) => value.end_date >= value.start_date, { message: "El periodo termina antes de comenzar", path: ["end_date"] });
+
+export const eventPriceSchema = z.object({
+  id: z.uuid().optional(),
+  program_id: z.uuid(),
+  period_id: z.uuid().nullable().optional(),
+  label: z.string().trim().min(2).max(120),
+  audience: z.enum(["all", "member", "non_member"]).default("all"),
+  amount: z.coerce.number().min(0).max(100000),
+});
+
+export const advancedEventBaseSchema = z.object({
+  title: z.string().trim().min(3).max(120),
+  event_type: z.string().trim().min(2).max(50),
+  description: z.string().trim().max(2000).nullable().optional(),
+  city: z.string().trim().min(2).max(100),
+  location: z.string().trim().max(200).nullable().optional(),
+  start_date: z.iso.date(),
+  end_date: z.iso.date(),
+  schedule: z.string().trim().max(200).nullable().optional(),
+  age_range: z.string().trim().max(50).nullable().optional(),
+  organizer_name: z.string().trim().max(150).nullable().optional(),
+  contact_email: z.email().nullable().optional(),
+  contact_phone: z.string().trim().max(30).nullable().optional(),
+}).refine((data) => data.end_date >= data.start_date, { message: "La fecha final debe ser posterior a la inicial", path: ["end_date"] });
+
+export const advancedEventDraftSchema = z.object({
+  programs: z.array(z.object({
+    name: z.string().trim().min(2).max(120),
+    turn: z.enum(["morning", "afternoon", "full_day", "custom"]).default("custom"),
+    description: z.string().trim().max(1000).nullable().optional(),
+    start_time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
+    end_time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
+    min_age: z.coerce.number().int().min(3).max(100).nullable().optional(),
+    max_age: z.coerce.number().int().min(3).max(100).nullable().optional(),
+    capacity: z.coerce.number().int().positive().max(100000).nullable().optional(),
+    payment_timing: z.enum(["immediate", "reserve", "deferred"]).default("immediate"),
+    payment_due_date: z.iso.date().nullable().optional(),
+    included_items: z.array(z.string().trim().min(1).max(100)).default([]),
+  })).default([]),
+  periods: z.array(z.object({ label: z.string().trim().min(2).max(100), start_date: z.iso.date(), end_date: z.iso.date() })).default([]),
+  prices: z.array(z.object({
+    program_name: z.string().trim().min(2).max(120),
+    period_label: z.string().trim().max(100).nullable().optional(),
+    label: z.string().trim().min(2).max(120),
+    audience: z.enum(["all", "member", "non_member"]).default("all"),
+    amount: z.coerce.number().min(0).max(100000),
+  })).default([]),
+  uncertainties: z.array(z.string().trim().min(2).max(300)).default([]),
 });

@@ -68,6 +68,25 @@ export async function PATCH(request: Request) {
   const body = await request.json();
   if (!body.id || !["draft", "published", "cancelled"].includes(body.status))
     return NextResponse.json({ error: "Datos no válidos" }, { status: 400 });
+  if (body.status === "published") {
+    const { data: event } = await supabase
+      .from("events")
+      .select("event_mode")
+      .eq("id", body.id)
+      .maybeSingle();
+    if (event?.event_mode === "advanced") {
+      const [{ count: programs }, { count: prices }] = await Promise.all([
+        supabase.from("event_programs").select("id", { count: "exact", head: true }).eq("event_id", body.id).eq("active", true),
+        supabase.from("event_prices").select("id", { count: "exact", head: true }).eq("event_id", body.id).eq("active", true),
+      ]);
+      if (!programs || !prices) {
+        return NextResponse.json(
+          { error: "Añade al menos una modalidad y una tarifa antes de publicar." },
+          { status: 400 },
+        );
+      }
+    }
+  }
   const { data, error } = await supabase
     .from("events")
     .update({ status: body.status })

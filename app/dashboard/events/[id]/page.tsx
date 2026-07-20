@@ -7,6 +7,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EventActions } from "@/components/events/event-actions";
 import { CopyBox } from "@/components/events/copy-box";
 import { RegistrationManager } from "@/components/events/registration-manager";
+import { AdvancedEventManager } from "@/components/events/advanced-event-manager";
+import type { RegistrationRecord } from "@/types/event";
 export default async function EventDetailPage({
   params,
 }: {
@@ -20,11 +22,26 @@ export default async function EventDetailPage({
     .eq("id", id)
     .single();
   if (!event) notFound();
-  const { data: registrations = [] } = await supabase
-    .from("registrations")
-    .select("*")
-    .eq("event_id", id)
-    .order("created_at", { ascending: false });
+  const advanced = event.event_mode === "advanced";
+  const registrationsResult = advanced
+    ? await supabase
+        .from("registrations")
+        .select("*, registration_items(amount, event_programs(name), event_periods(label), event_prices(label))")
+        .eq("event_id", id)
+        .order("created_at", { ascending: false })
+    : await supabase
+        .from("registrations")
+        .select("*")
+        .eq("event_id", id)
+        .order("created_at", { ascending: false });
+  const registrations = (registrationsResult.data ?? []) as RegistrationRecord[];
+  const [{ data: programs = [] }, { data: periods = [] }, { data: prices = [] }] = advanced
+    ? await Promise.all([
+        supabase.from("event_programs").select("*").eq("event_id", id).order("position"),
+        supabase.from("event_periods").select("*").eq("event_id", id).order("position"),
+        supabase.from("event_prices").select("*").eq("event_id", id).order("position"),
+      ])
+    : [{ data: [] }, { data: [] }, { data: [] }];
   return (
     <div className="mx-auto max-w-7xl">
       <header className="mb-7 flex flex-wrap items-start justify-between gap-4">
@@ -47,6 +64,21 @@ export default async function EventDetailPage({
       </header>
       <div className="grid gap-6 xl:grid-cols-[1.4fr_.8fr]">
         <div className="space-y-6">
+          {advanced && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Configuración avanzada del campus</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <AdvancedEventManager
+                  eventId={event.id}
+                  programs={programs ?? []}
+                  periods={periods ?? []}
+                  prices={prices ?? []}
+                />
+              </CardContent>
+            </Card>
+          )}
           <Card>
             <CardHeader>
               <CardTitle>Información del evento</CardTitle>

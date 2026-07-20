@@ -4,7 +4,7 @@ Asistente conversacional para crear y gestionar eventos de fútbol. Incluye dash
 
 ## Puesta en marcha
 
-1. Crea un proyecto en Supabase y ejecuta `supabase/migrations/001_initial_schema.sql` en el SQL Editor.
+1. Crea un proyecto en Supabase y ejecuta, en orden, los archivos de `supabase/migrations/` desde el SQL Editor.
 2. Copia `.env.example` a `.env.local` y completa las variables. Usa la nueva
    publishable key (`sb_publishable_...`) en el cliente y la secret key
    (`sb_secret_...`) exclusivamente en el servidor.
@@ -24,6 +24,23 @@ curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \
 ```
 
 El usuario debe crear primero su cuenta web. Al escribir `/start`, el bot solicitará el email para vincular de forma segura el chat con ese perfil.
+
+### Campus avanzados desde Telegram
+
+WeMoot conserva dos recorridos:
+
+- **Modo rápido:** un evento con un horario, precio y capacidad globales. Puede publicarse directamente desde Telegram.
+- **Modo avanzado:** campus con modalidades, semanas y tarifas diferentes. Telegram genera un borrador y obliga a revisar las tablas en el dashboard antes de publicarlo.
+
+Para importar un cartel, envíalo como foto o como archivo de imagen al bot, acompañado opcionalmente de una descripción. El bot acumula la información de varias imágenes, señala contradicciones y extrae modalidades, periodos y tarifas. La imagen se procesa temporalmente y no se almacena en Supabase.
+
+Antes de utilizar este modo en producción, ejecuta `supabase/migrations/002_advanced_events.sql`. El dashboard permite completar o corregir:
+
+- modalidades, turnos, edades, plazas y momento del pago;
+- semanas o periodos;
+- tarifas para socios, no socios o todos los participantes.
+
+Los importes, la disponibilidad y las condiciones de pago se validan en el backend. La IA sólo prepara el borrador.
 
 ## Configurar Stripe
 

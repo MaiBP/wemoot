@@ -42,13 +42,16 @@ export function RegistrationManager({
   function exportCsv() {
     const esc = (v: unknown) => `"${String(v ?? "").replaceAll('"', '""')}"`;
     const rows = [
-      ["Nombre", "Email", "Teléfono", "Edad", "Pago"],
+      ["Nombre", "Email", "Teléfono", "Edad", "Pago", "Modalidad", "Periodo", "Tarifa"],
       ...registrations.map((r) => [
         r.participant_name,
         r.participant_email,
         r.participant_phone,
         r.participant_age,
         r.payment_status,
+        r.registration_items?.[0]?.event_programs?.name,
+        r.registration_items?.[0]?.event_periods?.label,
+        r.registration_items?.[0]?.event_prices?.label,
       ]),
     ];
     const blob = new Blob(
@@ -149,6 +152,17 @@ export function RegistrationManager({
                         {r.participant_age} años
                       </span>
                     ) : null}
+                    {r.registration_items?.[0] && (
+                      <span className="block text-xs font-normal text-brand-cyan">
+                        {r.registration_items[0].event_programs?.name}
+                        {r.registration_items[0].event_periods?.label
+                          ? ` · ${r.registration_items[0].event_periods.label}`
+                          : ""}
+                        {r.registration_items[0].event_prices?.label
+                          ? ` · ${r.registration_items[0].event_prices.label}`
+                          : ""}
+                      </span>
+                    )}
                   </td>
                   <td className="text-brand-black/60">
                     {r.participant_email || r.participant_phone || "—"}
