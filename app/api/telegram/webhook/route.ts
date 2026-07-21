@@ -24,7 +24,8 @@ const fieldNames: Record<string, string> = {
   location: "ubicación exacta",
   schedule: "horario",
 };
-const yes = /^(sí|si|yes|publica|publícalo|publicar|confirmar|guardar borrador)$/i;
+const yes =
+  /^(sí|si|yes|publica|publícalo|publicar|confirmar|guardar borrador)$/i;
 
 async function saveAdvancedStructure(
   admin: ReturnType<typeof createAdminClient>,
@@ -75,6 +76,24 @@ async function saveAdvancedStructure(
   const periodIds = new Map(
     (periods ?? []).map((period) => [period.label.toLowerCase(), period.id]),
   );
+  const programPeriods = (programs ?? []).flatMap((program) =>
+    (periods ?? []).map((period) => {
+      const source = draft.programs.find(
+        (item) => item.name.toLowerCase() === program.name.toLowerCase(),
+      );
+      return {
+        program_id: program.id,
+        period_id: period.id,
+        capacity: source?.capacity ?? 1,
+      };
+    }),
+  );
+  if (programPeriods.length) {
+    const { error } = await admin
+      .from("event_program_periods")
+      .insert(programPeriods);
+    if (error) throw error;
+  }
   const prices = draft.prices.flatMap((price, position) => {
     const programId = programIds.get(price.program_name.toLowerCase());
     if (!programId) return [];
@@ -106,11 +125,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   const update = (await request.json()) as TelegramUpdate;
   const message = update.message;
-  if (!message || (!message.text && !message.caption && !message.photo && !message.document)) {
+  if (
+    !message ||
+    (!message.text && !message.caption && !message.photo && !message.document)
+  ) {
     return NextResponse.json({ ok: true });
   }
   const chatId = String(message.chat.id);
-  const text = (message.text ?? message.caption ?? "Importar este cartel como borrador de evento avanzado")
+  const text = (
+    message.text ??
+    message.caption ??
+    "Importar este cartel como borrador de evento avanzado"
+  )
     .trim()
     .slice(0, 4000);
   const admin = createAdminClient();
@@ -214,12 +240,18 @@ export async function POST(request: Request) {
           .select()
           .single()
       ).data;
-    if (state?.current_flow === "awaiting_confirmation" && /^cancelar$/i.test(text)) {
+    if (
+      state?.current_flow === "awaiting_confirmation" &&
+      /^cancelar$/i.test(text)
+    ) {
       await admin
         .from("conversation_states")
         .update({ current_flow: null, collected_data: {}, missing_fields: [] })
         .eq("telegram_chat_id", chatId);
-      await sendTelegramMessage(chatId, "Borrador descartado. Puedes comenzar otro evento cuando quieras.");
+      await sendTelegramMessage(
+        chatId,
+        "Borrador descartado. Puedes comenzar otro evento cuando quieras.",
+      );
       return NextResponse.json({ ok: true });
     }
     if (state?.current_flow === "awaiting_confirmation" && yes.test(text)) {
@@ -228,7 +260,8 @@ export async function POST(request: Request) {
         .catch({ programs: [], periods: [], prices: [], uncertainties: [] })
         .parse(collectedData.advanced);
       const isAdvanced =
-        collectedData.event_mode === "advanced" || advancedDraft.programs.length > 0;
+        collectedData.event_mode === "advanced" ||
+        advancedDraft.programs.length > 0;
       const parsed = isAdvanced
         ? advancedEventBaseSchema.safeParse(collectedData)
         : eventSchema.safeParse(collectedData);
@@ -260,8 +293,12 @@ export async function POST(request: Request) {
         .from("events")
         .insert({
           ...parsed.data,
-          price: isAdvanced ? minimumPrice : (parsed.data as { price: number }).price,
-          capacity: isAdvanced ? Math.max(totalCapacity, 1) : (parsed.data as { capacity: number }).capacity,
+          price: isAdvanced
+            ? minimumPrice
+            : (parsed.data as { price: number }).price,
+          capacity: isAdvanced
+            ? Math.max(totalCapacity, 1)
+            : (parsed.data as { capacity: number }).capacity,
           ...(isAdvanced ? { event_mode: "advanced" } : {}),
           owner_id: profileId,
           organization_id: null,
@@ -355,7 +392,8 @@ export async function POST(request: Request) {
     const advanced = advancedEventDraftSchema
       .catch({ programs: [], periods: [], prices: [], uncertainties: [] })
       .parse(collected.advanced);
-    const isAdvanced = collected.event_mode === "advanced" || advanced.programs.length > 0;
+    const isAdvanced =
+      collected.event_mode === "advanced" || advanced.programs.length > 0;
     await sendTelegramMessage(
       chatId,
       isAdvanced

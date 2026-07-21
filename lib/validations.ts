@@ -1,29 +1,43 @@
 import { z } from "zod";
 
-export const eventSchema = z.object({
-  title: z.string().trim().min(3).max(120),
-  event_type: z.string().trim().min(2).max(50),
-  description: z.string().trim().max(2000).nullable().optional(),
-  city: z.string().trim().min(2).max(100),
-  location: z.string().trim().max(200).nullable().optional(),
-  start_date: z.iso.date(),
-  end_date: z.iso.date(),
-  schedule: z.string().trim().max(200).nullable().optional(),
-  age_range: z.string().trim().max(50).nullable().optional(),
-  price: z.coerce.number().min(0).max(100000),
-  capacity: z.coerce.number().int().positive().max(100000),
-}).refine((data) => data.end_date >= data.start_date, { message: "La fecha final debe ser posterior a la inicial", path: ["end_date"] });
+export const eventSchema = z
+  .object({
+    title: z.string().trim().min(3).max(120),
+    event_type: z.string().trim().min(2).max(50),
+    description: z.string().trim().max(2000).nullable().optional(),
+    city: z.string().trim().min(2).max(100),
+    location: z.string().trim().max(200).nullable().optional(),
+    start_date: z.iso.date(),
+    end_date: z.iso.date(),
+    schedule: z.string().trim().max(200).nullable().optional(),
+    age_range: z.string().trim().max(50).nullable().optional(),
+    price: z.coerce.number().min(0).max(100000),
+    capacity: z.coerce.number().int().positive().max(100000),
+  })
+  .refine((data) => data.end_date >= data.start_date, {
+    message: "La fecha final debe ser posterior a la inicial",
+    path: ["end_date"],
+  });
 
 export const registrationSchema = z.object({
   event_id: z.uuid(),
   participant_name: z.string().trim().min(2).max(120),
   participant_email: z.email().nullable().optional(),
   participant_phone: z.string().trim().max(30).nullable().optional(),
-  participant_age: z.coerce.number().int().min(3).max(100).nullable().optional(),
+  participant_age: z.coerce
+    .number()
+    .int()
+    .min(3)
+    .max(100)
+    .nullable()
+    .optional(),
   notes: z.string().trim().max(1000).nullable().optional(),
 });
 
-export const paymentUpdateSchema = z.object({ registration_id: z.uuid(), status: z.enum(["pending", "paid", "cancelled"]) });
+export const paymentUpdateSchema = z.object({
+  registration_id: z.uuid(),
+  status: z.enum(["pending", "paid", "cancelled"]),
+});
 
 export const publicRegistrationSchema = registrationSchema.extend({
   participant_email: z.email(),
@@ -42,30 +56,80 @@ export const publicRegistrationSchema = registrationSchema.extend({
   image_consent: z.boolean().default(false),
 });
 
-export const eventProgramSchema = z.object({
-  id: z.uuid().optional(),
-  name: z.string().trim().min(2).max(120),
-  turn: z.enum(["morning", "afternoon", "full_day", "custom"]).default("custom"),
-  description: z.string().trim().max(1000).nullable().optional(),
-  start_time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
-  end_time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
-  min_age: z.coerce.number().int().min(3).max(100).nullable().optional(),
-  max_age: z.coerce.number().int().min(3).max(100).nullable().optional(),
-  capacity: z.coerce.number().int().positive().max(100000),
-  payment_timing: z.enum(["immediate", "reserve", "deferred"]).default("immediate"),
-  payment_due_date: z.iso.date().nullable().optional(),
-  included_items: z.array(z.string().trim().min(1).max(100)).default([]),
-}).refine((value) => value.max_age == null || value.min_age == null || value.max_age >= value.min_age, {
-  message: "La edad máxima debe ser mayor que la mínima",
-  path: ["max_age"],
-});
+export const eventProgramSchema = z
+  .object({
+    id: z.uuid().optional(),
+    name: z.string().trim().min(2).max(120),
+    turn: z
+      .enum(["morning", "afternoon", "full_day", "custom"])
+      .default("custom"),
+    description: z.string().trim().max(1000).nullable().optional(),
+    start_time: z
+      .string()
+      .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
+      .nullable()
+      .optional(),
+    end_time: z
+      .string()
+      .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
+      .nullable()
+      .optional(),
+    min_age: z.coerce.number().int().min(3).max(100).nullable().optional(),
+    max_age: z.coerce.number().int().min(3).max(100).nullable().optional(),
+    capacity: z.coerce.number().int().positive().max(100000),
+    payment_timing: z
+      .enum(["immediate", "reserve", "deferred"])
+      .default("immediate"),
+    payment_due_date: z.iso.date().nullable().optional(),
+    included_items: z.array(z.string().trim().min(1).max(100)).default([]),
+    category: z.string().trim().max(100).nullable().optional(),
+    min_birth_year: z.coerce
+      .number()
+      .int()
+      .min(1900)
+      .max(2200)
+      .nullable()
+      .optional(),
+    max_birth_year: z.coerce
+      .number()
+      .int()
+      .min(1900)
+      .max(2200)
+      .nullable()
+      .optional(),
+  })
+  .refine(
+    (value) =>
+      value.max_age == null ||
+      value.min_age == null ||
+      value.max_age >= value.min_age,
+    {
+      message: "La edad máxima debe ser mayor que la mínima",
+      path: ["max_age"],
+    },
+  )
+  .refine(
+    (value) =>
+      value.max_birth_year == null ||
+      value.min_birth_year == null ||
+      value.max_birth_year >= value.min_birth_year,
+    {
+      message: "El año máximo debe ser mayor que el mínimo",
+      path: ["max_birth_year"],
+    },
+  );
 
-export const eventPeriodSchema = z.object({
-  id: z.uuid().optional(),
-  label: z.string().trim().min(2).max(100),
-  start_date: z.iso.date(),
-  end_date: z.iso.date(),
-}).refine((value) => value.end_date >= value.start_date, { message: "El periodo termina antes de comenzar", path: ["end_date"] });
+export const eventPeriodSchema = z
+  .object({
+    id: z.uuid().optional(),
+    label: z.string().trim().min(2).max(100),
+    start_date: z.iso.date(),
+    end_date: z.iso.date(),
+  })
+  .refine((value) => value.end_date >= value.start_date, {
+    message: "El periodo termina antes de comenzar",
+    path: ["end_date"],
+  });
 
 export const eventPriceSchema = z.object({
   id: z.uuid().optional(),
@@ -76,42 +140,89 @@ export const eventPriceSchema = z.object({
   amount: z.coerce.number().min(0).max(100000),
 });
 
-export const advancedEventBaseSchema = z.object({
-  title: z.string().trim().min(3).max(120),
-  event_type: z.string().trim().min(2).max(50),
-  description: z.string().trim().max(2000).nullable().optional(),
-  city: z.string().trim().min(2).max(100),
-  location: z.string().trim().max(200).nullable().optional(),
-  start_date: z.iso.date(),
-  end_date: z.iso.date(),
-  schedule: z.string().trim().max(200).nullable().optional(),
-  age_range: z.string().trim().max(50).nullable().optional(),
-  organizer_name: z.string().trim().max(150).nullable().optional(),
-  contact_email: z.email().nullable().optional(),
-  contact_phone: z.string().trim().max(30).nullable().optional(),
-}).refine((data) => data.end_date >= data.start_date, { message: "La fecha final debe ser posterior a la inicial", path: ["end_date"] });
+export const eventProgramPeriodSchema = z.object({
+  id: z.uuid(),
+  program_id: z.uuid(),
+  period_id: z.uuid(),
+  capacity: z.coerce.number().int().positive().max(100000).nullable(),
+  is_available: z.boolean(),
+});
+
+export const advancedEventBaseSchema = z
+  .object({
+    title: z.string().trim().min(3).max(120),
+    event_type: z.string().trim().min(2).max(50),
+    description: z.string().trim().max(2000).nullable().optional(),
+    city: z.string().trim().min(2).max(100),
+    location: z.string().trim().max(200).nullable().optional(),
+    start_date: z.iso.date(),
+    end_date: z.iso.date(),
+    schedule: z.string().trim().max(200).nullable().optional(),
+    age_range: z.string().trim().max(50).nullable().optional(),
+    organizer_name: z.string().trim().max(150).nullable().optional(),
+    contact_email: z.email().nullable().optional(),
+    contact_phone: z.string().trim().max(30).nullable().optional(),
+  })
+  .refine((data) => data.end_date >= data.start_date, {
+    message: "La fecha final debe ser posterior a la inicial",
+    path: ["end_date"],
+  });
 
 export const advancedEventDraftSchema = z.object({
-  programs: z.array(z.object({
-    name: z.string().trim().min(2).max(120),
-    turn: z.enum(["morning", "afternoon", "full_day", "custom"]).default("custom"),
-    description: z.string().trim().max(1000).nullable().optional(),
-    start_time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
-    end_time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
-    min_age: z.coerce.number().int().min(3).max(100).nullable().optional(),
-    max_age: z.coerce.number().int().min(3).max(100).nullable().optional(),
-    capacity: z.coerce.number().int().positive().max(100000).nullable().optional(),
-    payment_timing: z.enum(["immediate", "reserve", "deferred"]).default("immediate"),
-    payment_due_date: z.iso.date().nullable().optional(),
-    included_items: z.array(z.string().trim().min(1).max(100)).default([]),
-  })).default([]),
-  periods: z.array(z.object({ label: z.string().trim().min(2).max(100), start_date: z.iso.date(), end_date: z.iso.date() })).default([]),
-  prices: z.array(z.object({
-    program_name: z.string().trim().min(2).max(120),
-    period_label: z.string().trim().max(100).nullable().optional(),
-    label: z.string().trim().min(2).max(120),
-    audience: z.enum(["all", "member", "non_member"]).default("all"),
-    amount: z.coerce.number().min(0).max(100000),
-  })).default([]),
+  programs: z
+    .array(
+      z.object({
+        name: z.string().trim().min(2).max(120),
+        turn: z
+          .enum(["morning", "afternoon", "full_day", "custom"])
+          .default("custom"),
+        description: z.string().trim().max(1000).nullable().optional(),
+        start_time: z
+          .string()
+          .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
+          .nullable()
+          .optional(),
+        end_time: z
+          .string()
+          .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
+          .nullable()
+          .optional(),
+        min_age: z.coerce.number().int().min(3).max(100).nullable().optional(),
+        max_age: z.coerce.number().int().min(3).max(100).nullable().optional(),
+        capacity: z.coerce
+          .number()
+          .int()
+          .positive()
+          .max(100000)
+          .nullable()
+          .optional(),
+        payment_timing: z
+          .enum(["immediate", "reserve", "deferred"])
+          .default("immediate"),
+        payment_due_date: z.iso.date().nullable().optional(),
+        included_items: z.array(z.string().trim().min(1).max(100)).default([]),
+      }),
+    )
+    .default([]),
+  periods: z
+    .array(
+      z.object({
+        label: z.string().trim().min(2).max(100),
+        start_date: z.iso.date(),
+        end_date: z.iso.date(),
+      }),
+    )
+    .default([]),
+  prices: z
+    .array(
+      z.object({
+        program_name: z.string().trim().min(2).max(120),
+        period_label: z.string().trim().max(100).nullable().optional(),
+        label: z.string().trim().min(2).max(120),
+        audience: z.enum(["all", "member", "non_member"]).default("all"),
+        amount: z.coerce.number().min(0).max(100000),
+      }),
+    )
+    .default([]),
   uncertainties: z.array(z.string().trim().min(2).max(300)).default([]),
 });

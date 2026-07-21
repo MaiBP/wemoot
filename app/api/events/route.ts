@@ -71,17 +71,47 @@ export async function PATCH(request: Request) {
   if (body.status === "published") {
     const { data: event } = await supabase
       .from("events")
-      .select("event_mode")
+      .select("event_mode,complexity")
       .eq("id", body.id)
       .maybeSingle();
-    if (event?.event_mode === "advanced") {
-      const [{ count: programs }, { count: prices }] = await Promise.all([
-        supabase.from("event_programs").select("id", { count: "exact", head: true }).eq("event_id", body.id).eq("active", true),
-        supabase.from("event_prices").select("id", { count: "exact", head: true }).eq("event_id", body.id).eq("active", true),
-      ]);
-      if (!programs || !prices) {
+    if (event?.event_mode === "advanced" || event?.complexity === "complex") {
+      const { data: programs } = await supabase
+        .from("event_programs")
+        .select("id")
+        .eq("event_id", body.id)
+        .eq("active", true);
+      const programIds = (programs ?? []).map((program) => program.id);
+      const [{ count: periods }, { count: prices }, availabilityResult] =
+        await Promise.all([
+          supabase
+            .from("event_periods")
+            .select("id", { count: "exact", head: true })
+            .eq("event_id", body.id)
+            .eq("active", true),
+          supabase
+            .from("event_prices")
+            .select("id", { count: "exact", head: true })
+            .eq("event_id", body.id)
+            .eq("active", true),
+          programIds.length
+            ? supabase
+                .from("event_program_periods")
+                .select("id", { count: "exact", head: true })
+                .in("program_id", programIds)
+                .eq("is_available", true)
+            : Promise.resolve({ count: 0 }),
+        ]);
+      if (
+        !programIds.length ||
+        !periods ||
+        !prices ||
+        !availabilityResult.count
+      ) {
         return NextResponse.json(
-          { error: "Añade al menos una modalidad y una tarifa antes de publicar." },
+          {
+            error:
+              "Añade al menos una modalidad, un periodo, una combinación disponible y una tarifa antes de publicar.",
+          },
           { status: 400 },
         );
       }

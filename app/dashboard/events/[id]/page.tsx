@@ -8,7 +8,7 @@ import { EventActions } from "@/components/events/event-actions";
 import { CopyBox } from "@/components/events/copy-box";
 import { RegistrationManager } from "@/components/events/registration-manager";
 import { AdvancedEventManager } from "@/components/events/advanced-event-manager";
-import type { RegistrationRecord } from "@/types/event";
+import type { EventProgramPeriod, RegistrationRecord } from "@/types/event";
 export default async function EventDetailPage({
   params,
 }: {
@@ -26,7 +26,9 @@ export default async function EventDetailPage({
   const registrationsResult = advanced
     ? await supabase
         .from("registrations")
-        .select("*, registration_items(amount, event_programs(name), event_periods(label), event_prices(label))")
+        .select(
+          "*, registration_items(amount, event_programs(name), event_periods(label), event_prices(label))",
+        )
         .eq("event_id", id)
         .order("created_at", { ascending: false })
     : await supabase
@@ -34,14 +36,40 @@ export default async function EventDetailPage({
         .select("*")
         .eq("event_id", id)
         .order("created_at", { ascending: false });
-  const registrations = (registrationsResult.data ?? []) as RegistrationRecord[];
-  const [{ data: programs = [] }, { data: periods = [] }, { data: prices = [] }] = advanced
+  const registrations = (registrationsResult.data ??
+    []) as RegistrationRecord[];
+  const [
+    { data: programs = [] },
+    { data: periods = [] },
+    { data: prices = [] },
+  ] = advanced
     ? await Promise.all([
-        supabase.from("event_programs").select("*").eq("event_id", id).order("position"),
-        supabase.from("event_periods").select("*").eq("event_id", id).order("position"),
-        supabase.from("event_prices").select("*").eq("event_id", id).order("position"),
+        supabase
+          .from("event_programs")
+          .select("*")
+          .eq("event_id", id)
+          .order("position"),
+        supabase
+          .from("event_periods")
+          .select("*")
+          .eq("event_id", id)
+          .order("position"),
+        supabase
+          .from("event_prices")
+          .select("*")
+          .eq("event_id", id)
+          .order("position"),
       ])
     : [{ data: [] }, { data: [] }, { data: [] }];
+  const programIds = (programs ?? []).map((program) => program.id);
+  const { data: programPeriods = [] } =
+    advanced && programIds.length
+      ? await supabase
+          .from("event_program_periods")
+          .select("*")
+          .in("program_id", programIds)
+          .order("created_at")
+      : { data: [] };
   return (
     <div className="mx-auto max-w-7xl">
       <header className="mb-7 flex flex-wrap items-start justify-between gap-4">
@@ -75,6 +103,9 @@ export default async function EventDetailPage({
                   programs={programs ?? []}
                   periods={periods ?? []}
                   prices={prices ?? []}
+                  programPeriods={
+                    (programPeriods ?? []) as EventProgramPeriod[]
+                  }
                 />
               </CardContent>
             </Card>

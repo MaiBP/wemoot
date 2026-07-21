@@ -42,6 +42,12 @@ Antes de utilizar este modo en producción, ejecuta `supabase/migrations/002_adv
 
 Los importes, la disponibilidad y las condiciones de pago se validan en el backend. La IA sólo prepara el borrador.
 
+### Fase 1 del modelo de eventos complejos
+
+Ejecuta también `supabase/migrations/003_complex_event_phase1.sql` después de la migración 002. Esta fase incorpora el contrato `simple/complex`, metadatos ampliados de modalidades y periodos, y la tabla `event_program_periods` para definir aforo y disponibilidad por cada combinación. El dashboard permite administrar esa matriz y la inscripción pública la valida en el servidor.
+
+La migración conserva y sincroniza los nombres utilizados por el MVP anterior (`event_mode`, `turn`, `active`, `position`), por lo que los eventos y el flujo de Telegram existentes siguen siendo compatibles. El motor de reglas de precios, descuentos, formulario configurable y reservas temporales de Stripe pertenecen a fases posteriores y no forman parte de esta entrega.
+
 ## Configurar Stripe
 
 1. Añade `STRIPE_SECRET_KEY` con la clave secreta de Stripe. Para probar usa una clave `sk_test_...`.

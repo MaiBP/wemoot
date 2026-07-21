@@ -1,5 +1,6 @@
 export type EventStatus = "draft" | "published" | "cancelled";
 export type PaymentStatus = "pending" | "paid" | "cancelled";
+export type EventComplexity = "simple" | "complex";
 
 export interface EventRecord {
   id: string;
@@ -28,6 +29,11 @@ export interface EventRecord {
   organizer_name?: string | null;
   contact_email?: string | null;
   contact_phone?: string | null;
+  complexity?: EventComplexity;
+  currency?: string;
+  general_settings?: Record<string, unknown>;
+  cancellation_policy?: string | null;
+  cover_image_url?: string | null;
 }
 
 export interface EventProgram {
@@ -46,6 +52,15 @@ export interface EventProgram {
   included_items: string[];
   active: boolean;
   position: number;
+  slug?: string | null;
+  category?: string | null;
+  shift?: "morning" | "afternoon" | "full_day" | "custom" | null;
+  min_birth_year?: number | null;
+  max_birth_year?: number | null;
+  metadata?: Record<string, unknown>;
+  is_active?: boolean;
+  sort_order?: number;
+  updated_at?: string;
 }
 
 export interface EventPeriod {
@@ -56,6 +71,20 @@ export interface EventPeriod {
   end_date: string;
   active: boolean;
   position: number;
+  name?: string;
+  is_active?: boolean;
+  sort_order?: number;
+}
+
+export interface EventProgramPeriod {
+  id: string;
+  program_id: string;
+  period_id: string;
+  capacity: number | null;
+  registered_count: number;
+  is_available: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface EventPrice {
@@ -99,7 +128,26 @@ export interface RegistrationRecord {
 
 export interface ParsedEvent {
   intent: "create_event" | "list_events" | "help" | "unknown";
-  event: Partial<Pick<EventRecord, "title" | "event_type" | "description" | "city" | "location" | "start_date" | "end_date" | "schedule" | "age_range" | "price" | "capacity" | "event_mode" | "organizer_name" | "contact_email" | "contact_phone">>;
+  event: Partial<
+    Pick<
+      EventRecord,
+      | "title"
+      | "event_type"
+      | "description"
+      | "city"
+      | "location"
+      | "start_date"
+      | "end_date"
+      | "schedule"
+      | "age_range"
+      | "price"
+      | "capacity"
+      | "event_mode"
+      | "organizer_name"
+      | "contact_email"
+      | "contact_phone"
+    >
+  >;
   missing_fields: string[];
   social_copy: string;
   whatsapp_message: string;
