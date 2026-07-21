@@ -8,7 +8,13 @@ import { EventActions } from "@/components/events/event-actions";
 import { CopyBox } from "@/components/events/copy-box";
 import { RegistrationManager } from "@/components/events/registration-manager";
 import { AdvancedEventManager } from "@/components/events/advanced-event-manager";
-import type { EventProgramPeriod, RegistrationRecord } from "@/types/event";
+import { PricingRulesManager } from "@/components/events/pricing-rules-manager";
+import type {
+  EventDiscount,
+  EventPriceRule,
+  EventProgramPeriod,
+  RegistrationRecord,
+} from "@/types/event";
 export default async function EventDetailPage({
   params,
 }: {
@@ -70,6 +76,20 @@ export default async function EventDetailPage({
           .in("program_id", programIds)
           .order("created_at")
       : { data: [] };
+  const [{ data: priceRules = [] }, { data: discounts = [] }] = advanced
+    ? await Promise.all([
+        supabase
+          .from("event_price_rules")
+          .select("*")
+          .eq("event_id", id)
+          .order("priority", { ascending: false }),
+        supabase
+          .from("event_discounts")
+          .select("*")
+          .eq("event_id", id)
+          .order("priority", { ascending: false }),
+      ])
+    : [{ data: [] }, { data: [] }];
   return (
     <div className="mx-auto max-w-7xl">
       <header className="mb-7 flex flex-wrap items-start justify-between gap-4">
@@ -106,6 +126,22 @@ export default async function EventDetailPage({
                   programPeriods={
                     (programPeriods ?? []) as EventProgramPeriod[]
                   }
+                />
+              </CardContent>
+            </Card>
+          )}
+          {advanced && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Precios y descuentos</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <PricingRulesManager
+                  eventId={event.id}
+                  programs={programs ?? []}
+                  periods={periods ?? []}
+                  rules={(priceRules ?? []) as EventPriceRule[]}
+                  discounts={(discounts ?? []) as EventDiscount[]}
                 />
               </CardContent>
             </Card>

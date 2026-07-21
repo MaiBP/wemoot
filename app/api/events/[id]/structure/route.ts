@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import {
+  eventDiscountSchema,
   eventPeriodSchema,
   eventPriceSchema,
   eventProgramPeriodSchema,
   eventProgramSchema,
+  eventPriceRuleSchema,
 } from "@/lib/validations";
 import { createSlug } from "@/lib/slug";
 
@@ -27,19 +29,30 @@ async function refreshEventTotals(
   supabase: Awaited<ReturnType<typeof createClient>>,
   eventId: string,
 ) {
-  const [{ data: programs }, { data: prices }] = await Promise.all([
-    supabase.from("event_programs").select("capacity").eq("event_id", eventId),
-    supabase
-      .from("event_prices")
-      .select("amount")
-      .eq("event_id", eventId)
-      .eq("active", true),
-  ]);
+  const [{ data: programs }, { data: rules }, { data: legacyPrices }] =
+    await Promise.all([
+      supabase
+        .from("event_programs")
+        .select("capacity")
+        .eq("event_id", eventId),
+      supabase
+        .from("event_price_rules")
+        .select("amount")
+        .eq("event_id", eventId)
+        .eq("is_active", true),
+      supabase
+        .from("event_prices")
+        .select("amount")
+        .eq("event_id", eventId)
+        .eq("active", true),
+    ]);
   const capacity = (programs ?? []).reduce(
     (total, program) => total + Number(program.capacity),
     0,
   );
-  const amounts = (prices ?? []).map((price) => Number(price.amount));
+  const amounts = (rules?.length ? rules : (legacyPrices ?? [])).map((price) =>
+    Number(price.amount),
+  );
   await supabase
     .from("events")
     .update({
@@ -221,6 +234,101 @@ export async function POST(
       .eq("period_id", parsed.data.period_id)
       .select()
       .single();
+  } else if (body.kind === "price_rule") {
+    const parsed = eventPriceRuleSchema.safeParse(body.data);
+    if (!parsed.success)
+      return NextResponse.json(
+        { error: parsed.error.issues[0]?.message ?? "Datos no válidos" },
+        { status: 400 },
+      );
+    const { id: recordId, ...values } = parsed.data;
+    if (values.program_id) {
+      const { data: program } = await supabase
+        .from("event_programs")
+        .select("id")
+        .eq("id", values.program_id)
+        .eq("event_id", eventId)
+        .maybeSingle();
+      if (!program)
+        return NextResponse.json(
+          { error: "La modalidad no pertenece al evento" },
+          { status: 400 },
+        );
+    }
+    if (values.period_id) {
+      const { data: period } = await supabase
+        .from("event_periods")
+        .select("id")
+        .eq("id", values.period_id)
+        .eq("event_id", eventId)
+        .maybeSingle();
+      if (!period)
+        return NextResponse.json(
+          { error: "El periodo no pertenece al evento" },
+          { status: 400 },
+        );
+    }
+    const payload = {
+      ...values,
+      event_id: eventId,
+      currency: values.currency.toUpperCase(),
+      starts_at: values.starts_at
+        ? new Date(values.starts_at).toISOString()
+        : null,
+      ends_at: values.ends_at ? new Date(values.ends_at).toISOString() : null,
+    };
+    result = await (
+      recordId
+        ? supabase
+            .from("event_price_rules")
+            .update(payload)
+            .eq("id", recordId)
+            .eq("event_id", eventId)
+        : supabase.from("event_price_rules").insert(payload)
+    )
+      .select()
+      .single();
+  } else if (body.kind === "discount") {
+    const parsed = eventDiscountSchema.safeParse(body.data);
+    if (!parsed.success)
+      return NextResponse.json(
+        { error: parsed.error.issues[0]?.message ?? "Datos no válidos" },
+        { status: 400 },
+      );
+    const { id: recordId, ...values } = parsed.data;
+    if (values.program_id) {
+      const { data: program } = await supabase
+        .from("event_programs")
+        .select("id")
+        .eq("id", values.program_id)
+        .eq("event_id", eventId)
+        .maybeSingle();
+      if (!program)
+        return NextResponse.json(
+          { error: "La modalidad no pertenece al evento" },
+          { status: 400 },
+        );
+    }
+    const payload = {
+      ...values,
+      event_id: eventId,
+      code: values.code?.toUpperCase() ?? null,
+      starts_at: values.starts_at
+        ? new Date(values.starts_at).toISOString()
+        : null,
+      ends_at: values.ends_at ? new Date(values.ends_at).toISOString() : null,
+    };
+    result = await (
+      recordId
+        ? supabase
+            .from("event_discounts")
+            .update(payload)
+            .eq("id", recordId)
+            .eq("event_id", eventId)
+        : supabase.from("event_discounts").insert(payload)
+    )
+      .select()
+      .single();
   } else {
     return NextResponse.json(
       { error: "Tipo de estructura no válido" },
@@ -260,6 +368,8 @@ export async function DELETE(
     program: "event_programs",
     period: "event_periods",
     price: "event_prices",
+    price_rule: "event_price_rules",
+    discount: "event_discounts",
   } as const;
   const table = tables[kind as keyof typeof tables];
   if (!table || !recordId) {

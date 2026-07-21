@@ -46,6 +46,7 @@ export const publicRegistrationSchema = registrationSchema.extend({
   program_id: z.uuid().nullable().optional(),
   period_id: z.uuid().nullable().optional(),
   price_id: z.uuid().nullable().optional(),
+  discount_code: z.string().trim().max(40).nullable().optional(),
   participant_birth_date: z.iso.date().nullable().optional(),
   guardian_name: z.string().trim().max(120).nullable().optional(),
   club_member: z.boolean().nullable().optional(),
@@ -147,6 +148,131 @@ export const eventProgramPeriodSchema = z.object({
   capacity: z.coerce.number().int().positive().max(100000).nullable(),
   is_available: z.boolean(),
 });
+
+const optionalDateTimeSchema = z
+  .string()
+  .trim()
+  .nullable()
+  .optional()
+  .refine((value) => value == null || !Number.isNaN(Date.parse(value)), {
+    message: "Fecha y hora no válidas",
+  });
+
+export const eventPriceRuleSchema = z
+  .object({
+    id: z.uuid().optional(),
+    program_id: z.uuid().nullable().optional(),
+    period_id: z.uuid().nullable().optional(),
+    participant_type: z
+      .enum([
+        "general",
+        "member",
+        "non_member",
+        "player",
+        "goalkeeper",
+        "custom",
+      ])
+      .default("general"),
+    pricing_type: z.enum([
+      "fixed",
+      "per_period",
+      "period_bundle",
+      "full_event",
+      "early_bird",
+      "manual",
+    ]),
+    quantity_from: z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(1000)
+      .nullable()
+      .optional(),
+    quantity_to: z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(1000)
+      .nullable()
+      .optional(),
+    amount: z.coerce.number().min(0).max(100000),
+    currency: z.string().trim().length(3).default("EUR"),
+    label: z.string().trim().max(120).nullable().optional(),
+    description: z.string().trim().max(1000).nullable().optional(),
+    priority: z.coerce.number().int().min(-10000).max(10000).default(0),
+    starts_at: optionalDateTimeSchema,
+    ends_at: optionalDateTimeSchema,
+    is_active: z.boolean().default(true),
+  })
+  .refine(
+    (value) =>
+      value.quantity_to == null ||
+      value.quantity_from == null ||
+      value.quantity_to >= value.quantity_from,
+    {
+      message: "La cantidad máxima debe ser mayor que la mínima",
+      path: ["quantity_to"],
+    },
+  )
+  .refine(
+    (value) =>
+      value.ends_at == null ||
+      value.starts_at == null ||
+      Date.parse(value.ends_at) >= Date.parse(value.starts_at),
+    { message: "La regla termina antes de comenzar", path: ["ends_at"] },
+  );
+
+export const eventDiscountSchema = z
+  .object({
+    id: z.uuid().optional(),
+    program_id: z.uuid().nullable().optional(),
+    code: z.string().trim().min(2).max(40).nullable().optional(),
+    name: z.string().trim().min(2).max(120),
+    description: z.string().trim().max(1000).nullable().optional(),
+    discount_type: z.enum([
+      "percentage",
+      "fixed_amount",
+      "full_event",
+      "bundle",
+      "manual",
+    ]),
+    discount_value: z.coerce.number().min(0).max(100000),
+    applies_to: z.enum(["event", "program"]).default("event"),
+    min_periods: z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(1000)
+      .nullable()
+      .optional(),
+    starts_at: optionalDateTimeSchema,
+    ends_at: optionalDateTimeSchema,
+    usage_limit: z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(1000000)
+      .nullable()
+      .optional(),
+    priority: z.coerce.number().int().min(-10000).max(10000).default(0),
+    is_combinable: z.boolean().default(false),
+    is_active: z.boolean().default(true),
+  })
+  .refine(
+    (value) =>
+      value.discount_type !== "percentage" || value.discount_value <= 100,
+    {
+      message: "El porcentaje no puede superar el 100 %",
+      path: ["discount_value"],
+    },
+  )
+  .refine(
+    (value) =>
+      value.ends_at == null ||
+      value.starts_at == null ||
+      Date.parse(value.ends_at) >= Date.parse(value.starts_at),
+    { message: "El descuento termina antes de comenzar", path: ["ends_at"] },
+  );
 
 export const advancedEventBaseSchema = z
   .object({

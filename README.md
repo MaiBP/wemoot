@@ -46,7 +46,13 @@ Los importes, la disponibilidad y las condiciones de pago se validan en el backe
 
 Ejecuta también `supabase/migrations/003_complex_event_phase1.sql` después de la migración 002. Esta fase incorpora el contrato `simple/complex`, metadatos ampliados de modalidades y periodos, y la tabla `event_program_periods` para definir aforo y disponibilidad por cada combinación. El dashboard permite administrar esa matriz y la inscripción pública la valida en el servidor.
 
-La migración conserva y sincroniza los nombres utilizados por el MVP anterior (`event_mode`, `turn`, `active`, `position`), por lo que los eventos y el flujo de Telegram existentes siguen siendo compatibles. El motor de reglas de precios, descuentos, formulario configurable y reservas temporales de Stripe pertenecen a fases posteriores y no forman parte de esta entrega.
+La migración conserva y sincroniza los nombres utilizados por el MVP anterior (`event_mode`, `turn`, `active`, `position`), por lo que los eventos y el flujo de Telegram existentes siguen siendo compatibles. El formulario configurable y las reservas temporales de Stripe pertenecen a fases posteriores.
+
+### Fase 2: precios deterministas
+
+Después de la migración 003, ejecuta `supabase/migrations/004_pricing_engine_phase2.sql`. Esta migración crea reglas de precio, descuentos, snapshots de cálculo y el control de usos de cada promoción. Las tarifas anteriores se migran y continúan sincronizadas para no romper el formulario público ni Telegram.
+
+El servicio `lib/pricing/calculate-registration-price.ts` recalcula siempre en el servidor. Los importes se convierten a céntimos antes de operar, se selecciona una regla por prioridad y se validan códigos, vigencia, límites y compatibilidad de descuentos. El navegador no decide el importe enviado a Stripe. Ejecuta `npm test` para comprobar los casos mínimos del motor.
 
 ## Configurar Stripe
 

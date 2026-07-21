@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createStripeCancelToken, getStripe } from "@/lib/stripe";
+import { PricingError } from "@/lib/pricing/calculate-price";
+import {
+  calculateRegistrationPrice,
+  type CalculatePriceInput,
+} from "@/lib/pricing/calculate-registration-price";
 import {
   publicRegistrationSchema,
   registrationSchema,
@@ -53,6 +58,9 @@ export async function POST(request: Request) {
     } | null = null;
     let participantAge: number | null = null;
     let selectedPeriodId: string | null = null;
+    let priceCalculation: Awaited<
+      ReturnType<typeof calculateRegistrationPrice>
+    > | null = null;
     if (event.event_mode === "advanced") {
       if (!parsed.data.program_id || !parsed.data.price_id) {
         return NextResponse.json(
@@ -143,7 +151,12 @@ export async function POST(request: Request) {
       }
       selectedPeriodId =
         selectedPrice.period_id ?? parsed.data.period_id ?? null;
-      if (selectedPeriodId) {
+      if (!selectedPeriodId) {
+        return NextResponse.json(
+          { error: "Selecciona una semana o periodo." },
+          { status: 400 },
+        );
+      } else {
         const { data: period } = await admin
           .from("event_periods")
           .select("id")
@@ -193,7 +206,16 @@ export async function POST(request: Request) {
           { status: 409 },
         );
       }
-      amount = Number(selectedPrice.amount);
+      const priceInput: CalculatePriceInput = {
+        eventId: event.id,
+        programId: program.id,
+        periodIds: [selectedPeriodId],
+        participantType: expectedAudience,
+        discountCode: parsed.data.discount_code ?? undefined,
+        legacyPriceId: selectedPrice.id,
+      };
+      priceCalculation = await calculateRegistrationPrice(priceInput, admin);
+      amount = priceCalculation.finalAmount / 100;
       selectedProgram = program;
     } else {
       const { count } = await admin
@@ -248,6 +270,47 @@ export async function POST(request: Request) {
       .single();
     if (registrationError) throw registrationError;
 
+    if (priceCalculation) {
+      const { error: snapshotError } = await admin
+        .from("registration_price_snapshots")
+        .insert({
+          registration_id: created.id,
+          calculation: priceCalculation,
+          base_amount: priceCalculation.baseAmount,
+          discount_amount: priceCalculation.discounts.reduce(
+            (total, discount) => total + discount.amount,
+            0,
+          ),
+          final_amount: priceCalculation.finalAmount,
+          currency: priceCalculation.currency,
+        });
+      if (snapshotError) {
+        await admin.from("registrations").delete().eq("id", created.id);
+        throw snapshotError;
+      }
+      if (priceCalculation.discounts.length) {
+        const { error: discountUseError } = await admin
+          .from("registration_discount_uses")
+          .insert(
+            priceCalculation.discounts.map((discount) => ({
+              registration_id: created.id,
+              discount_id: discount.id,
+              amount: discount.amount,
+            })),
+          );
+        if (discountUseError) {
+          await admin.from("registrations").delete().eq("id", created.id);
+          if (discountUseError.message.includes("límite de usos")) {
+            throw new PricingError(
+              "INVALID_DISCOUNT",
+              "El código de descuento ha alcanzado su límite de usos.",
+            );
+          }
+          throw discountUseError;
+        }
+      }
+    }
+
     if (selectedProgram && parsed.data.price_id) {
       const { error: itemError } = await admin
         .from("registration_items")
@@ -299,8 +362,13 @@ export async function POST(request: Request) {
           {
             quantity: 1,
             price_data: {
-              currency: "eur",
-              unit_amount: Math.round(amount * 100),
+              currency: (
+                priceCalculation?.currency ??
+                event.currency ??
+                "EUR"
+              ).toLowerCase(),
+              unit_amount:
+                priceCalculation?.finalAmount ?? Math.round(amount * 100),
               product_data: {
                 name: `Inscripción · ${event.title}${selectedProgram ? ` · ${selectedProgram.name}` : ""}`,
               },
@@ -323,6 +391,9 @@ export async function POST(request: Request) {
       throw error;
     }
   } catch (error) {
+    if (error instanceof PricingError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     console.error("Public registration error", error);
     return NextResponse.json(
       { error: "No pudimos completar la inscripción. Inténtalo de nuevo." },

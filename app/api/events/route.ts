@@ -81,36 +81,46 @@ export async function PATCH(request: Request) {
         .eq("event_id", body.id)
         .eq("active", true);
       const programIds = (programs ?? []).map((program) => program.id);
-      const [{ count: periods }, { count: prices }, availabilityResult] =
-        await Promise.all([
-          supabase
-            .from("event_periods")
-            .select("id", { count: "exact", head: true })
-            .eq("event_id", body.id)
-            .eq("active", true),
-          supabase
-            .from("event_prices")
-            .select("id", { count: "exact", head: true })
-            .eq("event_id", body.id)
-            .eq("active", true),
-          programIds.length
-            ? supabase
-                .from("event_program_periods")
-                .select("id", { count: "exact", head: true })
-                .in("program_id", programIds)
-                .eq("is_available", true)
-            : Promise.resolve({ count: 0 }),
-        ]);
+      const [
+        { count: periods },
+        { count: prices },
+        { count: priceRules },
+        availabilityResult,
+      ] = await Promise.all([
+        supabase
+          .from("event_periods")
+          .select("id", { count: "exact", head: true })
+          .eq("event_id", body.id)
+          .eq("active", true),
+        supabase
+          .from("event_prices")
+          .select("id", { count: "exact", head: true })
+          .eq("event_id", body.id)
+          .eq("active", true),
+        supabase
+          .from("event_price_rules")
+          .select("id", { count: "exact", head: true })
+          .eq("event_id", body.id)
+          .eq("is_active", true),
+        programIds.length
+          ? supabase
+              .from("event_program_periods")
+              .select("id", { count: "exact", head: true })
+              .in("program_id", programIds)
+              .eq("is_available", true)
+          : Promise.resolve({ count: 0 }),
+      ]);
       if (
         !programIds.length ||
         !periods ||
         !prices ||
+        !priceRules ||
         !availabilityResult.count
       ) {
         return NextResponse.json(
           {
             error:
-              "Añade al menos una modalidad, un periodo, una combinación disponible y una tarifa antes de publicar.",
+              "Añade al menos una modalidad, un periodo, una combinación disponible, una tarifa y una regla de precio antes de publicar.",
           },
           { status: 400 },
         );

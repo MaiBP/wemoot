@@ -99,6 +99,64 @@ export interface EventPrice {
   position: number;
 }
 
+export type ParticipantType =
+  "general" | "member" | "non_member" | "player" | "goalkeeper" | "custom";
+
+export type PricingType =
+  | "fixed"
+  | "per_period"
+  | "period_bundle"
+  | "full_event"
+  | "early_bird"
+  | "manual";
+
+export interface EventPriceRule {
+  id: string;
+  event_id: string;
+  program_id: string | null;
+  period_id: string | null;
+  participant_type: ParticipantType;
+  pricing_type: PricingType;
+  quantity_from: number | null;
+  quantity_to: number | null;
+  amount: number | string;
+  currency: string;
+  label: string | null;
+  description: string | null;
+  priority: number;
+  starts_at: string | null;
+  ends_at: string | null;
+  legacy_price_id: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export type DiscountType =
+  "percentage" | "fixed_amount" | "full_event" | "bundle" | "manual";
+
+export interface EventDiscount {
+  id: string;
+  event_id: string;
+  program_id: string | null;
+  code: string | null;
+  name: string;
+  description: string | null;
+  discount_type: DiscountType;
+  discount_value: number | string;
+  applies_to: "event" | "program";
+  min_periods: number | null;
+  starts_at: string | null;
+  ends_at: string | null;
+  usage_limit: number | null;
+  usage_count: number;
+  priority: number;
+  is_combinable: boolean;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface RegistrationRecord {
   id: string;
   event_id: string;
