@@ -85,6 +85,7 @@ export async function PATCH(request: Request) {
         { count: periods },
         { count: prices },
         { count: priceRules },
+        { count: forms },
         availabilityResult,
       ] = await Promise.all([
         supabase
@@ -97,11 +98,16 @@ export async function PATCH(request: Request) {
           .select("id", { count: "exact", head: true })
           .eq("event_id", body.id)
           .eq("active", true),
-        supabase
-          .from("event_price_rules")
+          supabase
+            .from("event_price_rules")
           .select("id", { count: "exact", head: true })
           .eq("event_id", body.id)
-          .eq("is_active", true),
+            .eq("is_active", true),
+          supabase
+            .from("registration_forms")
+            .select("id", { count: "exact", head: true })
+            .eq("event_id", body.id)
+            .eq("status", "published"),
         programIds.length
           ? supabase
               .from("event_program_periods")
@@ -115,12 +121,13 @@ export async function PATCH(request: Request) {
         !periods ||
         !prices ||
         !priceRules ||
+        !forms ||
         !availabilityResult.count
       ) {
         return NextResponse.json(
           {
             error:
-              "Añade al menos una modalidad, un periodo, una combinación disponible, una tarifa y una regla de precio antes de publicar.",
+              "Configura modalidades, periodos, disponibilidad, precios y publica el formulario de inscripción antes de publicar el evento.",
           },
           { status: 400 },
         );

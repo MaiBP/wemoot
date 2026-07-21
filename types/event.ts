@@ -157,6 +157,83 @@ export interface EventDiscount {
   updated_at: string;
 }
 
+export type RegistrationFieldType =
+  | "text"
+  | "textarea"
+  | "email"
+  | "phone"
+  | "number"
+  | "date"
+  | "select"
+  | "multiselect"
+  | "radio"
+  | "checkbox"
+  | "boolean"
+  | "file"
+  | "signature"
+  | "address"
+  | "country"
+  | "province"
+  | "postal_code"
+  | "image"
+  | "heading"
+  | "legal_text";
+
+export interface RegistrationFormRecord {
+  id: string;
+  event_id: string;
+  name: string;
+  description: string | null;
+  template_key: string | null;
+  requires_account: boolean;
+  allow_guest_registration: boolean;
+  status: "draft" | "published" | "archived";
+  settings: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RegistrationFormSection {
+  id: string;
+  form_id: string;
+  title: string;
+  description: string | null;
+  section_key: string;
+  sort_order: number;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface RegistrationFormField {
+  id: string;
+  form_id: string;
+  section_id: string | null;
+  field_key: string;
+  label: string;
+  description: string | null;
+  placeholder: string | null;
+  field_type: RegistrationFieldType;
+  required: boolean;
+  options: Array<string | { label: string; value: string }>;
+  validation_rules: Record<string, unknown>;
+  conditional_logic: Record<string, unknown>;
+  default_value: unknown;
+  sort_order: number;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface EventIncludedItem {
+  id: string;
+  event_id: string;
+  program_id: string | null;
+  name: string;
+  description: string | null;
+  requires_size: boolean;
+  is_optional: boolean;
+  created_at: string;
+}
+
 export interface RegistrationRecord {
   id: string;
   event_id: string;
@@ -176,6 +253,12 @@ export interface RegistrationRecord {
   allergies?: string | null;
   medical_notes?: string | null;
   image_consent?: boolean;
+  program_id?: string | null;
+  participant_type?: ParticipantType;
+  total_amount?: number | null;
+  currency?: string;
+  event_programs?: { name: string } | null;
+  registration_periods?: Array<{ event_periods?: { label: string } | null }>;
   registration_items?: Array<{
     amount: number;
     event_programs?: { name: string } | null;

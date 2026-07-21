@@ -274,6 +274,71 @@ export const eventDiscountSchema = z
     { message: "El descuento termina antes de comenzar", path: ["ends_at"] },
   );
 
+export const registrationFormSectionSchema = z.object({
+  title: z.string().trim().min(2).max(120),
+  description: z.string().trim().max(500).nullable().optional(),
+  section_key: z
+    .string()
+    .trim()
+    .regex(/^[a-z][a-z0-9_]*$/)
+    .max(60),
+});
+
+export const registrationFormFieldSchema = z.object({
+  section_id: z.uuid(),
+  field_key: z
+    .string()
+    .trim()
+    .regex(/^[a-z][a-z0-9_]*$/)
+    .max(80),
+  label: z.string().trim().min(2).max(160),
+  description: z.string().trim().max(500).nullable().optional(),
+  placeholder: z.string().trim().max(160).nullable().optional(),
+  field_type: z.enum([
+    "text",
+    "textarea",
+    "email",
+    "phone",
+    "number",
+    "date",
+    "select",
+    "multiselect",
+    "radio",
+    "checkbox",
+    "boolean",
+    "file",
+    "signature",
+    "address",
+    "country",
+    "province",
+    "postal_code",
+    "image",
+    "heading",
+    "legal_text",
+  ]),
+  required: z.boolean().default(false),
+  options: z.array(z.string().trim().min(1).max(100)).max(100).default([]),
+});
+
+export const dynamicRegistrationSchema = z.object({
+  event_id: z.uuid(),
+  form_id: z.uuid(),
+  program_id: z.uuid(),
+  period_ids: z.array(z.uuid()).min(1).max(52),
+  participant_type: z.enum([
+    "general",
+    "member",
+    "non_member",
+    "player",
+    "goalkeeper",
+    "custom",
+  ]),
+  discount_code: z.string().trim().max(40).nullable().optional(),
+  payment_method: z.enum(["cash", "card"]),
+  answers: z.record(z.string(), z.unknown()),
+  website: z.string().max(0).optional(),
+});
+
 export const advancedEventBaseSchema = z
   .object({
     title: z.string().trim().min(3).max(120),

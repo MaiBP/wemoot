@@ -164,9 +164,8 @@ export function PricingRulesManager({
                   </td>
                   <td>{rule.priority}</td>
                   <td>
-                    {rule.legacy_price_id ? (
-                      <Badge>Importada</Badge>
-                    ) : (
+                    <div className="flex items-center justify-end gap-1">
+                      {rule.legacy_price_id && <Badge>Importada</Badge>}
                       <Button
                         size="icon"
                         variant="ghost"
@@ -175,7 +174,7 @@ export function PricingRulesManager({
                       >
                         <Trash2 className="size-4" />
                       </Button>
-                    )}
+                    </div>
                   </td>
                 </tr>
               ))}

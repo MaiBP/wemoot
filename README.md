@@ -54,6 +54,12 @@ Después de la migración 003, ejecuta `supabase/migrations/004_pricing_engine_p
 
 El servicio `lib/pricing/calculate-registration-price.ts` recalcula siempre en el servidor. Los importes se convierten a céntimos antes de operar, se selecciona una regla por prioridad y se validan códigos, vigencia, límites y compatibilidad de descuentos. El navegador no decide el importe enviado a Stripe. Ejecuta `npm test` para comprobar los casos mínimos del motor.
 
+### Fase 3: formularios configurables
+
+Ejecuta `supabase/migrations/005_registration_forms_phase3.sql` después de la migración 004. Desde cada evento complejo se puede abrir `/dashboard/events/<id>/registration-form`, aplicar la plantilla “Campus de fútbol completo”, añadir secciones y campos, cambiar su orden, activar requisitos, previsualizar y publicar el formulario.
+
+Cuando existe un formulario publicado, el enlace público utiliza un recorrido multipaso con borrador local, lógica condicional, varias semanas, precio server-side, respuestas dinámicas y snapshot de consentimientos provisionales. Los eventos simples y los complejos sin formulario publicado conservan temporalmente el formulario anterior.
+
 ## Configurar Stripe
 
 1. Añade `STRIPE_SECRET_KEY` con la clave secreta de Stripe. Para probar usa una clave `sk_test_...`.

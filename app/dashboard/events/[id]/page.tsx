@@ -1,9 +1,11 @@
 import { notFound } from "next/navigation";
+import Link from "next/link";
 import { CalendarDays, MapPin, Users } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { EventActions } from "@/components/events/event-actions";
 import { CopyBox } from "@/components/events/copy-box";
 import { RegistrationManager } from "@/components/events/registration-manager";
@@ -33,7 +35,7 @@ export default async function EventDetailPage({
     ? await supabase
         .from("registrations")
         .select(
-          "*, registration_items(amount, event_programs(name), event_periods(label), event_prices(label))",
+          "*, event_programs(name), registration_periods(event_periods(label)), registration_items(amount, event_programs(name), event_periods(label), event_prices(label))",
         )
         .eq("event_id", id)
         .order("created_at", { ascending: false })
@@ -44,11 +46,7 @@ export default async function EventDetailPage({
         .order("created_at", { ascending: false });
   const registrations = (registrationsResult.data ??
     []) as RegistrationRecord[];
-  const [
-    { data: programs = [] },
-    { data: periods = [] },
-    { data: prices = [] },
-  ] = advanced
+  const [{ data: programs = [] }, { data: periods = [] }] = advanced
     ? await Promise.all([
         supabase
           .from("event_programs")
@@ -60,13 +58,8 @@ export default async function EventDetailPage({
           .select("*")
           .eq("event_id", id)
           .order("position"),
-        supabase
-          .from("event_prices")
-          .select("*")
-          .eq("event_id", id)
-          .order("position"),
       ])
-    : [{ data: [] }, { data: [] }, { data: [] }];
+    : [{ data: [] }, { data: [] }];
   const programIds = (programs ?? []).map((program) => program.id);
   const { data: programPeriods = [] } =
     advanced && programIds.length
@@ -122,7 +115,6 @@ export default async function EventDetailPage({
                   eventId={event.id}
                   programs={programs ?? []}
                   periods={periods ?? []}
-                  prices={prices ?? []}
                   programPeriods={
                     (programPeriods ?? []) as EventProgramPeriod[]
                   }
@@ -216,6 +208,26 @@ export default async function EventDetailPage({
           </Card>
         </div>
         <aside className="space-y-6">
+          {advanced && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Formulario de inscripción</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="mb-4 text-sm text-brand-black/55">
+                  Configura secciones, campos obligatorios y la plantilla
+                  pública.
+                </p>
+                <Button asChild className="w-full">
+                  <Link
+                    href={`/dashboard/events/${event.id}/registration-form`}
+                  >
+                    Abrir constructor
+                  </Link>
+                </Button>
+              </CardContent>
+            </Card>
+          )}
           <Card>
             <CardHeader>
               <CardTitle>Copy para redes</CardTitle>

@@ -375,6 +375,31 @@ export async function DELETE(
   if (!table || !recordId) {
     return NextResponse.json({ error: "Solicitud no válida" }, { status: 400 });
   }
+
+  if (kind === "price_rule") {
+    const { data: rule, error: ruleError } = await supabase
+      .from("event_price_rules")
+      .select("legacy_price_id")
+      .eq("id", recordId)
+      .eq("event_id", eventId)
+      .maybeSingle();
+    if (ruleError) {
+      return NextResponse.json({ error: ruleError.message }, { status: 400 });
+    }
+    if (rule?.legacy_price_id) {
+      const { error } = await supabase
+        .from("event_prices")
+        .delete()
+        .eq("id", rule.legacy_price_id)
+        .eq("event_id", eventId);
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 400 });
+      }
+      await refreshEventTotals(supabase, eventId);
+      return NextResponse.json({ ok: true });
+    }
+  }
+
   const { error } = await supabase
     .from(table)
     .delete()

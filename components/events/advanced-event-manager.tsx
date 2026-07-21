@@ -5,7 +5,6 @@ import { Plus, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type {
   EventPeriod,
-  EventPrice,
   EventProgram,
   EventProgramPeriod,
 } from "@/types/event";
@@ -20,34 +19,23 @@ const turnNames = {
   full_day: "Todo el día",
   custom: "Personalizado",
 };
-const audienceNames = {
-  all: "Todos",
-  member: "Socios",
-  non_member: "No socios",
-};
-
 export function AdvancedEventManager({
   eventId,
   programs,
   periods,
-  prices,
   programPeriods,
 }: {
   eventId: string;
   programs: EventProgram[];
   periods: EventPeriod[];
-  prices: EventPrice[];
   programPeriods: EventProgramPeriod[];
 }) {
   const router = useRouter();
-  const [open, setOpen] = useState<"program" | "period" | "price" | null>(null);
+  const [open, setOpen] = useState<"program" | "period" | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  async function save(
-    kind: "program" | "period" | "price",
-    formData: FormData,
-  ) {
+  async function save(kind: "program" | "period", formData: FormData) {
     setBusy(true);
     setError("");
     const raw = Object.fromEntries(formData);
@@ -86,7 +74,7 @@ export function AdvancedEventManager({
     router.refresh();
   }
 
-  async function remove(kind: "program" | "period" | "price", id: string) {
+  async function remove(kind: "program" | "period", id: string) {
     if (!confirm("¿Quieres eliminar esta opción?")) return;
     const response = await fetch(
       `/api/events/${eventId}/structure?kind=${kind}&record_id=${id}`,
@@ -420,132 +408,6 @@ export function AdvancedEventManager({
             Añade al menos una modalidad y un periodo para configurar su
             disponibilidad.
           </p>
-        )}
-      </section>
-
-      <section>
-        <div className="mb-3 flex items-center justify-between">
-          <div>
-            <h3 className="font-semibold">Tarifas</h3>
-            <p className="text-sm text-brand-black/50">
-              El backend utilizará siempre estos importes.
-            </p>
-          </div>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setOpen(open === "price" ? null : "price")}
-            disabled={!programs.length}
-          >
-            <Plus className="size-4" /> Añadir
-          </Button>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="border-b text-xs uppercase text-brand-black/45">
-              <tr>
-                <th className="py-2">Modalidad</th>
-                <th>Tarifa</th>
-                <th>Periodo</th>
-                <th>Público</th>
-                <th>Precio</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {prices.map((price) => (
-                <tr key={price.id}>
-                  <td className="py-3">
-                    {
-                      programs.find((item) => item.id === price.program_id)
-                        ?.name
-                    }
-                  </td>
-                  <td>{price.label}</td>
-                  <td>
-                    {periods.find((item) => item.id === price.period_id)
-                      ?.label ?? "Cualquiera"}
-                  </td>
-                  <td>{audienceNames[price.audience]}</td>
-                  <td className="font-semibold">
-                    {Number(price.amount).toFixed(2)} €
-                  </td>
-                  <td>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      aria-label="Eliminar tarifa"
-                      onClick={() => remove("price", price.id)}
-                    >
-                      <Trash2 className="size-4" />
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {!prices.length && (
-            <p className="py-4 text-sm text-brand-black/50">
-              No hay tarifas configuradas.
-            </p>
-          )}
-        </div>
-        {open === "price" && (
-          <form
-            action={(data) => save("price", data)}
-            className="mt-4 grid gap-3 rounded-xl bg-brand-black/[.03] p-4 md:grid-cols-3"
-          >
-            <div>
-              <Label>Modalidad</Label>
-              <select
-                name="program_id"
-                required
-                className="h-10 w-full rounded-xl border bg-white px-3 text-sm"
-              >
-                {programs.map((program) => (
-                  <option key={program.id} value={program.id}>
-                    {program.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <Label>Periodo</Label>
-              <select
-                name="period_id"
-                className="h-10 w-full rounded-xl border bg-white px-3 text-sm"
-              >
-                <option value="">Cualquier periodo / bono</option>
-                {periods.map((period) => (
-                  <option key={period.id} value={period.id}>
-                    {period.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <Label>Tipo de participante</Label>
-              <select
-                name="audience"
-                className="h-10 w-full rounded-xl border bg-white px-3 text-sm"
-              >
-                <option value="all">Todos</option>
-                <option value="member">Socios</option>
-                <option value="non_member">No socios</option>
-              </select>
-            </div>
-            <div>
-              <Label>Nombre de tarifa</Label>
-              <Input name="label" required placeholder="1 semana" />
-            </div>
-            <div>
-              <Label>Precio (€)</Label>
-              <Input name="amount" type="number" min="0" step="0.01" required />
-            </div>
-            <div className="flex items-end">
-              <Button disabled={busy}>Guardar tarifa</Button>
-            </div>
-          </form>
         )}
       </section>
     </div>
