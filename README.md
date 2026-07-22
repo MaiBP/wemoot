@@ -66,6 +66,12 @@ Ejecuta `supabase/migrations/006_capacity_reservations_phase4.sql` después de l
 
 Stripe Checkout caduca a los 30 minutos, que es el mínimo admitido por Stripe. WeMoot mantiene la reserva interna durante 35 minutos para dar margen a la entrega del webhook. Un pago firmado confirma la plaza; cancelar o expirar Checkout la libera. Los flujos gratuito, efectivo y pago diferido confirman la capacidad sin pasar por Stripe.
 
+### Fase 5: asistente de campus en Telegram
+
+Ejecuta `supabase/migrations/007_telegram_complex_flow_phase5.sql` después de la migración 006. Esta migración registra el último `update_id` procesado para que los reintentos de Telegram no dupliquen pasos ni estructuras.
+
+Al detectar un evento complejo, el bot abre un menú para crear programas, generar o introducir semanas, interpretar precios, importar más información y elegir el formulario. Las tarifas interpretadas por OpenAI siempre se presentan para confirmación; sólo después se convierten en reglas deterministas. Las plantillas disponibles son Campus completo, Formulario básico y Formulario personalizado. El resultado se guarda como borrador y se publica desde el dashboard después de revisar su configuración.
+
 ## Configurar Stripe
 
 1. Añade `STRIPE_SECRET_KEY` con la clave secreta de Stripe. Para probar usa una clave `sk_test_...`.

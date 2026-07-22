@@ -278,3 +278,57 @@ export const campusTemplate: TemplateSection[] = [
     ],
   },
 ];
+
+export const basicRegistrationTemplate: TemplateSection[] = [
+  {
+    key: "participant",
+    title: "Datos del participante",
+    fields: [
+      {
+        key: "participant_name",
+        label: "Nombre",
+        type: "text",
+        required: true,
+      },
+      {
+        key: "first_surname",
+        label: "Primer apellido",
+        type: "text",
+        required: true,
+      },
+      {
+        key: "participant_birth_date",
+        label: "Fecha de nacimiento",
+        type: "date",
+        required: true,
+      },
+      {
+        key: "participant_email",
+        label: "Email",
+        type: "email",
+        required: true,
+      },
+      { key: "participant_phone", label: "Teléfono", type: "phone" },
+    ],
+  },
+  {
+    key: "program_selection",
+    title: "Modalidad y periodos",
+    description: "Selección dinámica según la configuración del evento.",
+    fields: [],
+  },
+  {
+    key: "consents",
+    title: "Autorizaciones",
+    fields: [
+      consent(
+        "participation_terms",
+        "Acepto las condiciones provisionales de participación.",
+      ),
+      consent(
+        "data_processing",
+        "Autorizo el tratamiento provisional de los datos de inscripción.",
+      ),
+    ],
+  },
+];

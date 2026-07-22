@@ -335,6 +335,9 @@ export interface AdvancedEventDraft {
     label: string;
     audience: "all" | "member" | "non_member";
     amount: number;
+    pricing_type?: PricingType;
+    quantity_from?: number | null;
+    quantity_to?: number | null;
   }>;
   uncertainties: string[];
 }

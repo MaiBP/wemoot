@@ -39,7 +39,7 @@ export async function sendTelegramMessage(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         chat_id: chatId,
-        text,
+        text: text.slice(0, 4096),
         disable_web_page_preview: true,
         ...(keyboard
           ? {
@@ -89,6 +89,8 @@ export async function getTelegramImageDataUrl(message: TelegramMessage) {
     throw new Error("No se pudo descargar la imagen de Telegram");
   }
   const mime = document?.mime_type || "image/jpeg";
-  const bytes = Buffer.from(await fileResponse.arrayBuffer()).toString("base64");
+  const bytes = Buffer.from(await fileResponse.arrayBuffer()).toString(
+    "base64",
+  );
   return `data:${mime};base64,${bytes}`;
 }

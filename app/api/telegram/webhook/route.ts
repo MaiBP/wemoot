@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { parseEventMessage } from "@/lib/event-parser";
+import {
+  parseComplexPricingMessage,
+  parseEventMessage,
+} from "@/lib/event-parser";
+import { createRegistrationTemplate } from "@/lib/forms/create-registration-template";
 import { createSlug } from "@/lib/slug";
 import {
   advancedEventBaseSchema,
@@ -13,6 +17,15 @@ import {
   type TelegramUpdate,
 } from "@/lib/telegram";
 import type { AdvancedEventDraft } from "@/types/event";
+import {
+  complexMenuKeyboard,
+  complexSummary,
+  getAdvancedDraft,
+  handleComplexFlowStep,
+  isComplexFlowName,
+  pricingPreview,
+  shouldUseComplexFlow,
+} from "@/lib/telegram/complex-event-flow";
 const fieldNames: Record<string, string> = {
   title: "nombre",
   event_type: "tipo",
@@ -25,7 +38,7 @@ const fieldNames: Record<string, string> = {
   schedule: "horario",
 };
 const yes =
-  /^(sí|si|yes|publica|publícalo|publicar|confirmar|guardar borrador)$/i;
+  /^(sí|si|yes|publica|publícalo|publicar|confirmar|confirmar borrador|guardar borrador)$/i;
 
 async function saveAdvancedStructure(
   admin: ReturnType<typeof createAdminClient>,
@@ -99,21 +112,46 @@ async function saveAdvancedStructure(
     if (!programId) return [];
     return [
       {
-        event_id: eventId,
-        program_id: programId,
-        period_id: price.period_label
-          ? (periodIds.get(price.period_label.toLowerCase()) ?? null)
-          : null,
-        label: price.label,
-        audience: price.audience,
-        amount: price.amount,
-        position,
+        source: price,
+        row: {
+          event_id: eventId,
+          program_id: programId,
+          period_id: price.period_label
+            ? (periodIds.get(price.period_label.toLowerCase()) ?? null)
+            : null,
+          label: price.label,
+          audience: price.audience,
+          amount: price.amount,
+          position,
+        },
       },
     ];
   });
   if (prices.length) {
-    const { error } = await admin.from("event_prices").insert(prices);
+    const { data: insertedPrices, error } = await admin
+      .from("event_prices")
+      .insert(prices.map((price) => price.row))
+      .select("id,position");
     if (error) throw error;
+    const insertedByPosition = new Map(
+      (insertedPrices ?? []).map((price) => [price.position, price.id]),
+    );
+    const ruleUpdates = await Promise.all(
+      prices.map((price) => {
+        const legacyPriceId = insertedByPosition.get(price.row.position);
+        if (!legacyPriceId) return Promise.resolve({ error: null });
+        return admin
+          .from("event_price_rules")
+          .update({
+            pricing_type: price.source.pricing_type ?? "fixed",
+            quantity_from: price.source.quantity_from ?? null,
+            quantity_to: price.source.quantity_to ?? null,
+          })
+          .eq("legacy_price_id", legacyPriceId);
+      }),
+    );
+    const updateError = ruleUpdates.find((result) => result.error)?.error;
+    if (updateError) throw updateError;
   }
 }
 export async function POST(request: Request) {
@@ -124,6 +162,8 @@ export async function POST(request: Request) {
   )
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   const update = (await request.json()) as TelegramUpdate;
+  if (!Number.isSafeInteger(update.update_id))
+    return NextResponse.json({ error: "Update no válido" }, { status: 400 });
   const message = update.message;
   if (
     !message ||
@@ -152,6 +192,20 @@ export async function POST(request: Request) {
       .select("*")
       .eq("telegram_chat_id", chatId)
       .maybeSingle();
+    if (state) {
+      const { data: claimedState, error: claimError } = await admin
+        .from("conversation_states")
+        .update({ last_update_id: update.update_id })
+        .eq("telegram_chat_id", chatId)
+        .or(
+          `last_update_id.is.null,last_update_id.lt.${Math.trunc(update.update_id)}`,
+        )
+        .select()
+        .maybeSingle();
+      if (claimError) throw claimError;
+      if (!claimedState) return NextResponse.json({ ok: true });
+      state = claimedState;
+    }
     if (!account) {
       if (!state) {
         await admin.from("conversation_states").insert({
@@ -160,6 +214,7 @@ export async function POST(request: Request) {
           collected_data: {},
           missing_fields: [],
           last_message: text,
+          last_update_id: update.update_id,
         });
         await sendTelegramMessage(
           chatId,
@@ -203,10 +258,26 @@ export async function POST(request: Request) {
     }
     if (!account) return NextResponse.json({ ok: true });
     const profileId = account.profile_id as string;
+    state =
+      state ??
+      (
+        await admin
+          .from("conversation_states")
+          .insert({
+            telegram_chat_id: chatId,
+            profile_id: profileId,
+            current_flow: null,
+            collected_data: {},
+            missing_fields: [],
+            last_update_id: update.update_id,
+          })
+          .select()
+          .single()
+      ).data;
     if (text === "/start" || text.toLowerCase() === "ayuda") {
       await sendTelegramMessage(
         chatId,
-        "Puedo crear eventos y consultar tus eventos.\n\nEscribe una descripción natural, por ejemplo:\n“Quiero crear un campus del 15 al 19 de julio en Barcelona, 75 €, 40 plazas.”\n\nComandos: crear evento · mis eventos · ayuda",
+        "Puedo crear eventos simples y campus con varias modalidades, semanas y precios.\n\nEjemplos:\n“Quiero crear un torneo el 15 de julio en Barcelona, 75 €, 40 plazas.”\n“Quiero crear un campus de tecnificación con actividades de mañana y tarde.”\n\nComandos: crear evento · mis eventos · ayuda",
       );
       return NextResponse.json({ ok: true });
     }
@@ -225,23 +296,9 @@ export async function POST(request: Request) {
       await sendTelegramMessage(chatId, reply);
       return NextResponse.json({ ok: true });
     }
-    state =
-      state ??
-      (
-        await admin
-          .from("conversation_states")
-          .insert({
-            telegram_chat_id: chatId,
-            profile_id: profileId,
-            current_flow: null,
-            collected_data: {},
-            missing_fields: [],
-          })
-          .select()
-          .single()
-      ).data;
     if (
-      state?.current_flow === "awaiting_confirmation" &&
+      (state?.current_flow === "awaiting_confirmation" ||
+        isComplexFlowName(state?.current_flow)) &&
       /^cancelar$/i.test(text)
     ) {
       await admin
@@ -254,14 +311,117 @@ export async function POST(request: Request) {
       );
       return NextResponse.json({ ok: true });
     }
+    if (isComplexFlowName(state?.current_flow)) {
+      const existing = state.collected_data as Record<string, unknown>;
+      const result = handleComplexFlowStep(state.current_flow, text, existing);
+      if (result.action === "parse_pricing") {
+        const programNames = getAdvancedDraft(existing).programs.map(
+          (program) => program.name,
+        );
+        try {
+          const interpreted = await parseComplexPricingMessage(
+            text,
+            programNames,
+          );
+          if (!interpreted.prices.length) {
+            await sendTelegramMessage(
+              chatId,
+              `No encontré tarifas válidas.${interpreted.uncertainties.length ? `\n${interpreted.uncertainties.join("\n")}` : ""}\n\nDescríbelas de nuevo con importes y tipo de participante.`,
+            );
+            return NextResponse.json({ ok: true });
+          }
+          const advanced = getAdvancedDraft(existing);
+          const pricingData = {
+            ...existing,
+            telegram_pending_prices: interpreted.prices,
+            advanced: {
+              ...advanced,
+              uncertainties: [
+                ...new Set([
+                  ...advanced.uncertainties,
+                  ...interpreted.uncertainties,
+                ]),
+              ],
+            },
+          };
+          await admin
+            .from("conversation_states")
+            .update({
+              current_flow: "complex_pricing_confirmation",
+              collected_data: pricingData,
+              last_message: text,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("telegram_chat_id", chatId);
+          await sendTelegramMessage(
+            chatId,
+            `He interpretado estas tarifas:\n\n${pricingPreview(interpreted.prices).slice(0, 3500)}${interpreted.uncertainties.length ? `\n\n⚠️ Revisa:\n${interpreted.uncertainties.join("\n").slice(0, 350)}` : ""}`,
+            [["Confirmar precios", "Editar precios"], ["Menú"]],
+          );
+        } catch {
+          await sendTelegramMessage(
+            chatId,
+            "No pude interpretar esas tarifas. Comprueba que OpenAI esté configurado e inténtalo con importes claros.",
+          );
+        }
+        return NextResponse.json({ ok: true });
+      }
+      if (result.action === "import") {
+        const imported = await parseEventMessage(text, existing, imageDataUrl);
+        const importedData: Record<string, unknown> = {
+          ...existing,
+          ...Object.fromEntries(
+            Object.entries(imported.event).filter(
+              ([, value]) => value !== null && value !== undefined,
+            ),
+          ),
+          social_copy: imported.social_copy || existing.social_copy,
+          whatsapp_message:
+            imported.whatsapp_message || existing.whatsapp_message,
+          event_mode: "advanced",
+          advanced: imported.advanced ?? existing.advanced,
+        };
+        const nextFlow = imported.missing_fields.length
+          ? "creating_event"
+          : "complex_menu";
+        await admin
+          .from("conversation_states")
+          .update({
+            current_flow: nextFlow,
+            collected_data: importedData,
+            missing_fields: imported.missing_fields,
+            last_message: text,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("telegram_chat_id", chatId);
+        await sendTelegramMessage(
+          chatId,
+          imported.missing_fields.length
+            ? `He incorporado la información. Aún faltan:\n${imported.missing_fields.map((field) => `• ${fieldNames[field] ?? field}`).join("\n")}`
+            : `${imageDataUrl ? "Cartel analizado. " : "Información incorporada. "}${complexSummary(importedData)}\n\n¿Qué quieres configurar?`,
+          imported.missing_fields.length ? undefined : complexMenuKeyboard,
+        );
+        return NextResponse.json({ ok: true });
+      }
+      await admin
+        .from("conversation_states")
+        .update({
+          current_flow: result.flow,
+          collected_data: result.collected,
+          missing_fields: [],
+          last_message: text,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("telegram_chat_id", chatId);
+      await sendTelegramMessage(chatId, result.message, result.keyboard);
+      return NextResponse.json({ ok: true });
+    }
     if (state?.current_flow === "awaiting_confirmation" && yes.test(text)) {
       const collectedData = state.collected_data as Record<string, unknown>;
       const advancedDraft = advancedEventDraftSchema
         .catch({ programs: [], periods: [], prices: [], uncertainties: [] })
         .parse(collectedData.advanced);
-      const isAdvanced =
-        collectedData.event_mode === "advanced" ||
-        advancedDraft.programs.length > 0;
+      const isAdvanced = shouldUseComplexFlow(collectedData);
       const parsed = isAdvanced
         ? advancedEventBaseSchema.safeParse(collectedData)
         : eventSchema.safeParse(collectedData);
@@ -315,6 +475,13 @@ export async function POST(request: Request) {
       if (isAdvanced) {
         try {
           await saveAdvancedStructure(admin, event.id, advancedDraft);
+          const template = collectedData.registration_template;
+          if (
+            template === "football_campus_full" ||
+            template === "basic" ||
+            template === "blank"
+          )
+            await createRegistrationTemplate(admin, event.id, template);
         } catch (structureError) {
           await admin.from("events").delete().eq("id", event.id);
           throw structureError;
@@ -379,28 +546,27 @@ export async function POST(request: Request) {
       );
       return NextResponse.json({ ok: true });
     }
+    const advanced = advancedEventDraftSchema
+      .catch({ programs: [], periods: [], prices: [], uncertainties: [] })
+      .parse(collected.advanced);
+    const isAdvanced = shouldUseComplexFlow(collected);
     await admin
       .from("conversation_states")
       .update({
-        current_flow: "awaiting_confirmation",
+        current_flow: isAdvanced ? "complex_menu" : "awaiting_confirmation",
         collected_data: collected,
         missing_fields: [],
         last_message: text,
         updated_at: new Date().toISOString(),
       })
       .eq("telegram_chat_id", chatId);
-    const advanced = advancedEventDraftSchema
-      .catch({ programs: [], periods: [], prices: [], uncertainties: [] })
-      .parse(collected.advanced);
-    const isAdvanced =
-      collected.event_mode === "advanced" || advanced.programs.length > 0;
     await sendTelegramMessage(
       chatId,
       isAdvanced
-        ? `Listo. Detecté un campus avanzado:\n\n${collected.title}\n${collected.start_date} al ${collected.end_date}\n${collected.city}${collected.location ? ` · ${collected.location}` : ""}\n\nModalidades: ${advanced.programs.length}\nPeriodos: ${advanced.periods.length}\nTarifas: ${advanced.prices.length}${advanced.uncertainties.length ? `\n\n⚠️ Datos a revisar:\n${advanced.uncertainties.map((item) => `• ${item}`).join("\n")}` : ""}\n\nLo guardaré como borrador para revisar las tablas en el dashboard.`
+        ? `Detecté un campus con varias opciones.\n\n${complexSummary(collected)}${advanced.uncertainties.length ? `\n\n⚠️ Datos a revisar:\n${advanced.uncertainties.map((item) => `• ${item}`).join("\n")}` : ""}\n\n¿Cómo quieres configurarlo?`
         : `Listo. Te preparé este borrador:\n\n${collected.title}\n${collected.start_date} al ${collected.end_date}\n${collected.city}${collected.location ? ` · ${collected.location}` : ""}\n${collected.age_range ? `Edad: ${collected.age_range}\n` : ""}Precio: ${collected.price} €\nPlazas: ${collected.capacity}\n\nTambién preparé el copy para redes y WhatsApp.\n¿Quieres publicarlo ahora?`,
       isAdvanced
-        ? [["Guardar borrador", "Cancelar"]]
+        ? complexMenuKeyboard
         : [["Confirmar", "Guardar borrador"], ["Cancelar"]],
     );
     return NextResponse.json({ ok: true });

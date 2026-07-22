@@ -412,6 +412,30 @@ export const advancedEventDraftSchema = z.object({
         label: z.string().trim().min(2).max(120),
         audience: z.enum(["all", "member", "non_member"]).default("all"),
         amount: z.coerce.number().min(0).max(100000),
+        pricing_type: z
+          .enum([
+            "fixed",
+            "per_period",
+            "period_bundle",
+            "full_event",
+            "early_bird",
+            "manual",
+          ])
+          .default("fixed"),
+        quantity_from: z.coerce
+          .number()
+          .int()
+          .positive()
+          .max(52)
+          .nullable()
+          .optional(),
+        quantity_to: z.coerce
+          .number()
+          .int()
+          .positive()
+          .max(52)
+          .nullable()
+          .optional(),
       }),
     )
     .default([]),

@@ -4,6 +4,7 @@ import { z } from "zod";
 import { getOpenAI } from "@/lib/openai";
 import { advancedEventDraftSchema } from "@/lib/validations";
 import type { ParsedEvent } from "@/types/event";
+import { expandInterpretedPrices } from "@/lib/telegram/complex-event-flow";
 
 const eventDataSchema = z.object({
   title: z.string().optional(),
@@ -41,31 +42,47 @@ const aiEventDataSchema = z.object({
 });
 
 const aiAdvancedSchema = z.object({
-  programs: z.array(z.object({
-    name: z.string(),
-    turn: z.enum(["morning", "afternoon", "full_day", "custom"]),
-    description: z.string().nullable(),
-    start_time: z.string().nullable(),
-    end_time: z.string().nullable(),
-    min_age: z.number().int().nullable(),
-    max_age: z.number().int().nullable(),
-    capacity: z.number().int().nullable(),
-    payment_timing: z.enum(["immediate", "reserve", "deferred"]),
-    payment_due_date: z.string().nullable(),
-    included_items: z.array(z.string()),
-  })),
-  periods: z.array(z.object({
-    label: z.string(),
-    start_date: z.string(),
-    end_date: z.string(),
-  })),
-  prices: z.array(z.object({
-    program_name: z.string(),
-    period_label: z.string().nullable(),
-    label: z.string(),
-    audience: z.enum(["all", "member", "non_member"]),
-    amount: z.number(),
-  })),
+  programs: z.array(
+    z.object({
+      name: z.string(),
+      turn: z.enum(["morning", "afternoon", "full_day", "custom"]),
+      description: z.string().nullable(),
+      start_time: z.string().nullable(),
+      end_time: z.string().nullable(),
+      min_age: z.number().int().nullable(),
+      max_age: z.number().int().nullable(),
+      capacity: z.number().int().nullable(),
+      payment_timing: z.enum(["immediate", "reserve", "deferred"]),
+      payment_due_date: z.string().nullable(),
+      included_items: z.array(z.string()),
+    }),
+  ),
+  periods: z.array(
+    z.object({
+      label: z.string(),
+      start_date: z.string(),
+      end_date: z.string(),
+    }),
+  ),
+  prices: z.array(
+    z.object({
+      program_name: z.string(),
+      period_label: z.string().nullable(),
+      label: z.string(),
+      audience: z.enum(["all", "member", "non_member"]),
+      amount: z.number(),
+      pricing_type: z.enum([
+        "fixed",
+        "per_period",
+        "period_bundle",
+        "full_event",
+        "early_bird",
+        "manual",
+      ]),
+      quantity_from: z.number().int().nullable(),
+      quantity_to: z.number().int().nullable(),
+    }),
+  ),
   uncertainties: z.array(z.string()),
 });
 
@@ -132,11 +149,7 @@ function normalizeIntent(
   return "unknown";
 }
 
-function mergeByKey<T>(
-  previous: T[],
-  incoming: T[],
-  key: (item: T) => string,
-) {
+function mergeByKey<T>(previous: T[], incoming: T[], key: (item: T) => string) {
   const merged = new Map(
     previous.map((item) => [key(item).toLowerCase(), item]),
   );
@@ -238,7 +251,7 @@ export async function parseEventMessage(
     messages: [
       {
         role: "system",
-        content: `Eres el parser de WeMoot. Interpreta mensajes, documentos visuales y carteles en español o inglés sobre eventos de fútbol. Fecha actual: ${new Date().toISOString().slice(0, 10)}. Devuelve SOLO JSON con intent, event, event_mode, advanced, missing_fields, social_copy y whatsapp_message. Usa event_mode="advanced" cuando haya varias modalidades, turnos, periodos o tarifas. Para advanced devuelve programs, periods, prices y uncertainties. Cada precio referencia program_name y opcionalmente period_label. audience es all, member o non_member. turn es morning, afternoon, full_day o custom. payment_timing es immediate, reserve o deferred. Fechas YYYY-MM-DD y horas HH:mm. No inventes datos: cualquier contradicción o dato dudoso va en uncertainties. En eventos simples los campos mínimos son ${required.join(", ")}; en avanzados price y capacity se configuran por programa y no son obligatorios en event. Conserva y combina los datos existentes. Genera copy sólo cuando haya datos suficientes.`,
+        content: `Eres el parser de WeMoot. Interpreta mensajes, documentos visuales y carteles en español o inglés sobre eventos de fútbol. Fecha actual: ${new Date().toISOString().slice(0, 10)}. Devuelve SOLO JSON con intent, event, event_mode, advanced, missing_fields, social_copy y whatsapp_message. Usa event_mode="advanced" cuando haya varias modalidades, turnos, periodos o tarifas. Para advanced devuelve programs, periods, prices y uncertainties. Cada precio referencia program_name y opcionalmente period_label. audience es all, member o non_member. pricing_type es fixed, per_period, period_bundle, full_event, early_bird o manual; usa quantity_from y quantity_to para el número de semanas. turn es morning, afternoon, full_day o custom. payment_timing es immediate, reserve o deferred. Fechas YYYY-MM-DD y horas HH:mm. No inventes datos: cualquier contradicción o dato dudoso va en uncertainties. En eventos simples los campos mínimos son ${required.join(", ")}; en avanzados price y capacity se configuran por programa y no son obligatorios en event. Conserva y combina los datos existentes. Genera copy sólo cuando haya datos suficientes.`,
       },
       userMessage,
     ],
@@ -247,6 +260,71 @@ export async function parseEventMessage(
   const parsed = response.choices[0]?.message.parsed;
   if (!parsed) throw new Error("OpenAI no devolvió un borrador estructurado");
   return normalizeParsedEvent(parsed, existing);
+}
+
+const pricingInterpretationSchema = z.object({
+  prices: z.array(
+    z.object({
+      program_name: z.string().nullable(),
+      label: z.string(),
+      audience: z.enum(["all", "member", "non_member"]),
+      amount: z.number().nonnegative(),
+      pricing_type: z.enum([
+        "fixed",
+        "per_period",
+        "period_bundle",
+        "full_event",
+        "early_bird",
+        "manual",
+      ]),
+      quantity_from: z.number().int().positive().nullable(),
+      quantity_to: z.number().int().positive().nullable(),
+    }),
+  ),
+  uncertainties: z.array(z.string()),
+});
+
+export function normalizePricingInterpretation(
+  raw: unknown,
+  programNames: string[],
+) {
+  const parsed = pricingInterpretationSchema.parse(raw);
+  return expandInterpretedPrices(
+    parsed.prices,
+    programNames,
+    parsed.uncertainties,
+  );
+}
+
+export async function parseComplexPricingMessage(
+  message: string,
+  programNames: string[],
+) {
+  if (!process.env.OPENAI_API_KEY)
+    throw new Error("OpenAI no está configurado para interpretar precios");
+  const openai = getOpenAI();
+  const response = await openai.chat.completions.parse({
+    model: "gpt-4.1-mini",
+    temperature: 0.1,
+    response_format: zodResponseFormat(
+      pricingInterpretationSchema,
+      "wemoot_pricing_rules",
+    ),
+    messages: [
+      {
+        role: "system",
+        content:
+          "Interpreta tarifas de un evento deportivo y devuelve únicamente la estructura solicitada. No inventes importes. Usa audience member para socio, non_member para no socio y all para general. Una tarifa por cada periodo usa per_period y cantidad 1. Un bono de varias semanas usa period_bundle con quantity_from y quantity_to iguales al número indicado. Campus completo usa full_event con cantidades nulas. Si no se menciona un programa, deja program_name nulo para aplicar la tarifa a todos. Si algo es ambiguo, indícalo en uncertainties.",
+      },
+      {
+        role: "user",
+        content: JSON.stringify({ message, available_programs: programNames }),
+      },
+    ],
+  });
+  const parsed = response.choices[0]?.message.parsed;
+  if (!parsed) throw new Error("No se pudieron interpretar las tarifas");
+  return normalizePricingInterpretation(parsed, programNames);
 }
 
 export async function generateMarketingCopy(event: {
