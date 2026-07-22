@@ -46,7 +46,7 @@ Los importes, la disponibilidad y las condiciones de pago se validan en el backe
 
 Ejecuta también `supabase/migrations/003_complex_event_phase1.sql` después de la migración 002. Esta fase incorpora el contrato `simple/complex`, metadatos ampliados de modalidades y periodos, y la tabla `event_program_periods` para definir aforo y disponibilidad por cada combinación. El dashboard permite administrar esa matriz y la inscripción pública la valida en el servidor.
 
-La migración conserva y sincroniza los nombres utilizados por el MVP anterior (`event_mode`, `turn`, `active`, `position`), por lo que los eventos y el flujo de Telegram existentes siguen siendo compatibles. El formulario configurable y las reservas temporales de Stripe pertenecen a fases posteriores.
+La migración conserva y sincroniza los nombres utilizados por el MVP anterior (`event_mode`, `turn`, `active`, `position`), por lo que los eventos y el flujo de Telegram existentes siguen siendo compatibles.
 
 ### Fase 2: precios deterministas
 
@@ -59,6 +59,12 @@ El servicio `lib/pricing/calculate-registration-price.ts` recalcula siempre en e
 Ejecuta `supabase/migrations/005_registration_forms_phase3.sql` después de la migración 004. Desde cada evento complejo se puede abrir `/dashboard/events/<id>/registration-form`, aplicar la plantilla “Campus de fútbol completo”, añadir secciones y campos, cambiar su orden, activar requisitos, previsualizar y publicar el formulario.
 
 Cuando existe un formulario publicado, el enlace público utiliza un recorrido multipaso con borrador local, lógica condicional, varias semanas, precio server-side, respuestas dinámicas y snapshot de consentimientos provisionales. Los eventos simples y los complejos sin formulario publicado conservan temporalmente el formulario anterior.
+
+### Fase 4: Stripe y reserva de plazas
+
+Ejecuta `supabase/migrations/006_capacity_reservations_phase4.sql` después de la migración 005. La selección de cada modalidad y periodo se reserva mediante una función transaccional de PostgreSQL, evitando que dos pagos ocupen simultáneamente la última plaza. Las inscripciones existentes se migran como plazas confirmadas.
+
+Stripe Checkout caduca a los 30 minutos, que es el mínimo admitido por Stripe. WeMoot mantiene la reserva interna durante 35 minutos para dar margen a la entrega del webhook. Un pago firmado confirma la plaza; cancelar o expirar Checkout la libera. Los flujos gratuito, efectivo y pago diferido confirman la capacidad sin pasar por Stripe.
 
 ## Configurar Stripe
 

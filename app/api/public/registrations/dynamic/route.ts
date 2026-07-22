@@ -6,6 +6,13 @@ import { PricingError } from "@/lib/pricing/calculate-price";
 import { calculateRegistrationPrice } from "@/lib/pricing/calculate-registration-price";
 import { createStripeCancelToken, getStripe } from "@/lib/stripe";
 import {
+  attachStripeSession,
+  CapacityError,
+  confirmCapacity,
+  reserveCapacity,
+  STRIPE_CHECKOUT_MINUTES,
+} from "@/lib/capacity/reservations";
+import {
   validateParticipant,
   validateRequiredAnswers,
 } from "@/lib/forms/validate-registration";
@@ -21,6 +28,7 @@ const appUrl = (request: Request) =>
 export async function POST(request: Request) {
   const admin = createAdminClient();
   let createdId: string | null = null;
+  let createdStripeSessionId: string | null = null;
   try {
     const parsed = dynamicRegistrationSchema.safeParse(await request.json());
     if (!parsed.success || parsed.data.website)
@@ -129,20 +137,6 @@ export async function POST(request: Request) {
       if (!relation?.is_available)
         return NextResponse.json(
           { error: "Una semana seleccionada ya no está disponible" },
-          { status: 409 },
-        );
-      const { count } = await admin
-        .from("registration_periods")
-        .select("id, registrations!inner(payment_status)", {
-          count: "exact",
-          head: true,
-        })
-        .eq("program_id", program.id)
-        .eq("period_id", periodId)
-        .neq("registrations.payment_status", "cancelled");
-      if (relation.capacity != null && (count ?? 0) >= relation.capacity)
-        return NextResponse.json(
-          { error: "Una de las semanas seleccionadas está completa" },
           { status: 409 },
         );
     }
@@ -309,12 +303,22 @@ export async function POST(request: Request) {
       method,
     });
     if (paymentError) throw paymentError;
-    if (method !== "stripe")
+    await reserveCapacity(admin, {
+      eventId: event.id,
+      programId: program.id,
+      periodIds: input.period_ids,
+      registrationId: registration.id,
+    });
+    if (method !== "stripe") {
+      await confirmCapacity(admin, registration.id);
       return NextResponse.json({
         success_url: `${appUrl(request)}/events/${event.slug}/register/success?method=${method}`,
       });
+    }
     const session = await getStripe().checkout.sessions.create({
       mode: "payment",
+      payment_method_types: ["card"],
+      expires_at: Math.floor(Date.now() / 1000) + STRIPE_CHECKOUT_MINUTES * 60,
       customer_email: email,
       client_reference_id: registration.id,
       line_items: [
@@ -337,10 +341,26 @@ export async function POST(request: Request) {
       cancel_url: `${appUrl(request)}/api/stripe/cancel?registration_id=${registration.id}&event=${encodeURIComponent(event.slug)}&token=${createStripeCancelToken(registration.id)}`,
     });
     if (!session.url) throw new Error("Stripe no devolvió una URL");
+    createdStripeSessionId = session.id;
+    const { error: stripeReferenceError } = await admin
+      .from("payments")
+      .update({ stripe_session_id: session.id })
+      .eq("registration_id", registration.id);
+    if (stripeReferenceError) throw stripeReferenceError;
+    await attachStripeSession(admin, registration.id, session.id);
     return NextResponse.json({ checkout_url: session.url });
   } catch (error) {
+    if (createdStripeSessionId) {
+      try {
+        await getStripe().checkout.sessions.expire(createdStripeSessionId);
+      } catch {
+        // La eliminación local invalida igualmente la inscripción.
+      }
+    }
     if (createdId)
       await admin.from("registrations").delete().eq("id", createdId);
+    if (error instanceof CapacityError)
+      return NextResponse.json({ error: error.message }, { status: 409 });
     if (error instanceof PricingError)
       return NextResponse.json({ error: error.message }, { status: 400 });
     console.error(

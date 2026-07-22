@@ -1,6 +1,13 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createStripeCancelToken, getStripe } from "@/lib/stripe";
+import {
+  attachStripeSession,
+  CapacityError,
+  confirmCapacity,
+  reserveCapacity,
+  STRIPE_CHECKOUT_MINUTES,
+} from "@/lib/capacity/reservations";
 import { PricingError } from "@/lib/pricing/calculate-price";
 import {
   calculateRegistrationPrice,
@@ -18,6 +25,8 @@ function appUrl(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const admin = createAdminClient();
+  let createdId: string | null = null;
   try {
     const body = await request.json();
     const parsed = publicRegistrationSchema.safeParse(body);
@@ -30,7 +39,6 @@ export async function POST(request: Request) {
 
     const payment_method = parsed.data.payment_method;
     const registration = registrationSchema.parse(parsed.data);
-    const admin = createAdminClient();
     const { data: event } = await admin
       .from("events")
       .select("*")
@@ -58,6 +66,7 @@ export async function POST(request: Request) {
     } | null = null;
     let participantAge: number | null = null;
     let selectedPeriodId: string | null = null;
+    let participantType = "general";
     let priceCalculation: Awaited<
       ReturnType<typeof calculateRegistrationPrice>
     > | null = null;
@@ -140,6 +149,7 @@ export async function POST(request: Request) {
       const expectedAudience = parsed.data.club_member
         ? "member"
         : "non_member";
+      participantType = expectedAudience;
       if (
         selectedPrice.audience !== "all" &&
         selectedPrice.audience !== expectedAudience
@@ -263,12 +273,23 @@ export async function POST(request: Request) {
         allergies: parsed.data.allergies ?? null,
         medical_notes: parsed.data.medical_notes ?? null,
         image_consent: parsed.data.image_consent,
-        registration_status: requiresPaymentNow ? "confirmed" : "requested",
+        program_id: selectedProgram?.id ?? null,
+        participant_type: participantType,
+        total_amount: amount,
+        currency: priceCalculation?.currency ?? event.currency ?? "EUR",
+        submitted_at: new Date().toISOString(),
+        registration_status:
+          requiresPaymentNow && payment_method === "card" && !isFree
+            ? "pending_payment"
+            : requiresPaymentNow
+              ? "confirmed"
+              : "requested",
         payment_status: isFree ? "paid" : "pending",
       })
       .select("id")
       .single();
     if (registrationError) throw registrationError;
+    createdId = created.id;
 
     if (priceCalculation) {
       const { error: snapshotError } = await admin
@@ -347,15 +368,29 @@ export async function POST(request: Request) {
       throw paymentError;
     }
 
+    if (selectedProgram && selectedPeriodId) {
+      await reserveCapacity(admin, {
+        eventId: event.id,
+        programId: selectedProgram.id,
+        periodIds: [selectedPeriodId],
+        registrationId: created.id,
+      });
+    }
+
     if (isFree || !requiresPaymentNow || payment_method === "cash") {
+      if (selectedProgram) await confirmCapacity(admin, created.id);
       return NextResponse.json({
         success_url: `${appUrl(request)}/events/${event.slug}/register/success?method=${isFree ? "free" : !requiresPaymentNow ? "reserve" : "cash"}`,
       });
     }
 
+    let stripeSessionId: string | null = null;
     try {
       const session = await getStripe().checkout.sessions.create({
         mode: "payment",
+        payment_method_types: ["card"],
+        expires_at:
+          Math.floor(Date.now() / 1000) + STRIPE_CHECKOUT_MINUTES * 60,
         customer_email: parsed.data.participant_email,
         client_reference_id: created.id,
         line_items: [
@@ -385,14 +420,34 @@ export async function POST(request: Request) {
 
       if (!session.url)
         throw new Error("Stripe no devolvió una URL de Checkout");
+      stripeSessionId = session.id;
+      const { error: stripeReferenceError } = await admin
+        .from("payments")
+        .update({ stripe_session_id: session.id })
+        .eq("registration_id", created.id);
+      if (stripeReferenceError) throw stripeReferenceError;
+      if (selectedProgram)
+        await attachStripeSession(admin, created.id, session.id);
       return NextResponse.json({ checkout_url: session.url });
     } catch (error) {
+      if (stripeSessionId) {
+        try {
+          await getStripe().checkout.sessions.expire(stripeSessionId);
+        } catch {
+          // La inscripción se elimina a continuación.
+        }
+      }
       await admin.from("registrations").delete().eq("id", created.id);
       throw error;
     }
   } catch (error) {
+    if (createdId)
+      await admin.from("registrations").delete().eq("id", createdId);
     if (error instanceof PricingError) {
       return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    if (error instanceof CapacityError) {
+      return NextResponse.json({ error: error.message }, { status: 409 });
     }
     console.error("Public registration error", error);
     return NextResponse.json(

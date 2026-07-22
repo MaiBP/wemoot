@@ -33,7 +33,12 @@ export function PeriodSelector({
           const remaining =
             relation.capacity == null
               ? null
-              : Math.max(0, relation.capacity - relation.registered_count);
+              : Math.max(
+                  0,
+                  relation.capacity -
+                    relation.registered_count -
+                    (relation.reserved_count ?? 0),
+                );
           return (
             <label
               key={period.id}

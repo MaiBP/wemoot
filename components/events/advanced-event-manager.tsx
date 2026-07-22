@@ -351,6 +351,7 @@ export function AdvancedEventManager({
                   <th className="py-2">Modalidad</th>
                   <th>Periodo</th>
                   <th>Inscritos</th>
+                  <th>Reservadas</th>
                   <th>Aforo</th>
                   <th>Disponible</th>
                   <th />
@@ -371,6 +372,7 @@ export function AdvancedEventManager({
                       </td>
                       <td>{period?.label ?? "Periodo eliminado"}</td>
                       <td>{relation.registered_count}</td>
+                      <td>{relation.reserved_count ?? 0}</td>
                       <td colSpan={3}>
                         <form
                           action={(data) => saveAvailability(relation, data)}

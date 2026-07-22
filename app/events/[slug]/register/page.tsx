@@ -78,6 +78,7 @@ export default async function RegistrationPage({
     { data: formFields = [] },
     { data: programPeriods = [] },
     { data: includedItems = [] },
+    { data: activeReservations = [] },
   ] = registrationForm
     ? await Promise.all([
         admin
@@ -100,8 +101,29 @@ export default async function RegistrationPage({
             (programs ?? []).map((program) => program.id),
           ),
         admin.from("event_included_items").select("*").eq("event_id", event.id),
+        admin
+          .from("capacity_reservations")
+          .select("program_id,period_id,quantity")
+          .eq("event_id", event.id)
+          .eq("status", "reserved")
+          .gt("expires_at", new Date().toISOString()),
       ])
-    : [{ data: [] }, { data: [] }, { data: [] }, { data: [] }];
+    : [{ data: [] }, { data: [] }, { data: [] }, { data: [] }, { data: [] }];
+  const liveProgramPeriods = (programPeriods ?? []).map((relation) => ({
+    ...relation,
+    capacity:
+      relation.capacity ??
+      (programs ?? []).find((program) => program.id === relation.program_id)
+        ?.capacity ??
+      null,
+    reserved_count: (activeReservations ?? [])
+      .filter(
+        (reservation) =>
+          reservation.program_id === relation.program_id &&
+          reservation.period_id === relation.period_id,
+      )
+      .reduce((total, reservation) => total + reservation.quantity, 0),
+  }));
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(2,169,234,.16),transparent_35%),radial-gradient(circle_at_bottom_right,rgba(255,1,251,.10),transparent_35%)] px-4 py-8 sm:py-12">
@@ -188,7 +210,7 @@ export default async function RegistrationPage({
                   fields={(formFields ?? []) as RegistrationFormField[]}
                   programs={programs ?? []}
                   periods={periods ?? []}
-                  relations={(programPeriods ?? []) as EventProgramPeriod[]}
+                  relations={liveProgramPeriods as EventProgramPeriod[]}
                   includedItems={(includedItems ?? []) as EventIncludedItem[]}
                 />
               ) : (

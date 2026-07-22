@@ -82,7 +82,24 @@ export interface EventProgramPeriod {
   period_id: string;
   capacity: number | null;
   registered_count: number;
+  reserved_count: number;
   is_available: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CapacityReservation {
+  id: string;
+  event_id: string;
+  program_id: string;
+  period_id: string;
+  registration_id: string;
+  quantity: number;
+  status: "reserved" | "confirmed" | "expired" | "cancelled";
+  expires_at: string;
+  stripe_session_id: string | null;
+  confirmed_at: string | null;
+  cancelled_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -244,7 +261,8 @@ export interface RegistrationRecord {
   notes: string | null;
   payment_status: PaymentStatus;
   created_at: string;
-  registration_status?: "requested" | "confirmed" | "cancelled";
+  registration_status?:
+    "pending" | "pending_payment" | "requested" | "confirmed" | "cancelled";
   participant_birth_date?: string | null;
   guardian_name?: string | null;
   club_member?: boolean | null;
