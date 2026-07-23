@@ -29,6 +29,7 @@ export interface EventRecord {
   organizer_name?: string | null;
   contact_email?: string | null;
   contact_phone?: string | null;
+  location_id?: string | null;
   complexity?: EventComplexity;
   currency?: string;
   general_settings?: Record<string, unknown>;
@@ -305,6 +306,7 @@ export interface ParsedEvent {
       | "organizer_name"
       | "contact_email"
       | "contact_phone"
+      | "location_id"
     >
   >;
   missing_fields: string[];

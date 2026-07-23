@@ -5,7 +5,18 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-export function EventForm() {
+export function EventForm({
+  defaults,
+  locations,
+}: {
+  defaults: Record<string, string>;
+  locations: Array<{
+    id: string;
+    name: string;
+    city?: string | null;
+    address_line_1?: string | null;
+  }>;
+}) {
   const router = useRouter();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -52,7 +63,12 @@ export function EventForm() {
           </div>
           <div>
             <Label htmlFor="city">Ciudad *</Label>
-            <Input id="city" name="city" required />
+            <Input
+              id="city"
+              name="city"
+              required
+              defaultValue={defaults.city}
+            />
           </div>
           <div className="md:col-span-2">
             <Label htmlFor="description">Descripción</Label>
@@ -73,14 +89,59 @@ export function EventForm() {
           </div>
           <div>
             <Label htmlFor="location">Ubicación exacta</Label>
-            <Input id="location" name="location" />
+            <Input
+              id="location"
+              name="location"
+              defaultValue={defaults.location}
+            />
           </div>
+          {locations.length > 0 && (
+            <div>
+              <Label htmlFor="location_id">Ubicación guardada</Label>
+              <select
+                id="location_id"
+                name="location_id"
+                defaultValue={defaults.location_id}
+                className="h-10 w-full rounded-xl border border-brand-black/15 bg-white px-3 text-sm"
+              >
+                <option value="">Usar sólo el texto indicado</option>
+                {locations.map((location) => (
+                  <option key={location.id} value={location.id}>
+                    {location.name}
+                    {location.city ? ` · ${location.city}` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <div>
             <Label htmlFor="schedule">Horario</Label>
             <Input
               id="schedule"
               name="schedule"
               placeholder="De 9:00 a 13:00"
+            />
+          </div>
+        </div>
+      </section>
+      <section>
+        <h2 className="mb-4 font-semibold">Contacto del evento</h2>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <Label htmlFor="contact_email">Email</Label>
+            <Input
+              id="contact_email"
+              name="contact_email"
+              type="email"
+              defaultValue={defaults.contact_email}
+            />
+          </div>
+          <div>
+            <Label htmlFor="contact_phone">Teléfono</Label>
+            <Input
+              id="contact_phone"
+              name="contact_phone"
+              defaultValue={defaults.contact_phone}
             />
           </div>
         </div>

@@ -6,6 +6,24 @@ export async function GET(request: Request) {
   if (code) {
     const supabase = await createClient();
     await supabase.auth.exchangeCodeForSession(code);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (user) {
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("onboarding_status")
+        .eq("id", user.id)
+        .maybeSingle();
+      return NextResponse.redirect(
+        new URL(
+          profile?.onboarding_status === "completed"
+            ? "/dashboard"
+            : "/onboarding",
+          url.origin,
+        ),
+      );
+    }
   }
-  return NextResponse.redirect(new URL("/dashboard", url.origin));
+  return NextResponse.redirect(new URL("/login", url.origin));
 }

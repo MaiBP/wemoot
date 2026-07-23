@@ -26,7 +26,16 @@ export function AuthForm() {
       });
       if (error) setError(error.message);
       else {
-        router.push("/dashboard");
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("onboarding_status")
+          .eq("email", email)
+          .maybeSingle();
+        router.push(
+          profile?.onboarding_status === "completed"
+            ? "/dashboard"
+            : "/onboarding",
+        );
         router.refresh();
       }
     } else {

@@ -11,9 +11,7 @@ export async function proxy(request: NextRequest) {
       cookies: {
         getAll: () => request.cookies.getAll(),
         setAll: (items, headers) => {
-          items.forEach(({ name, value }) =>
-            request.cookies.set(name, value),
-          );
+          items.forEach(({ name, value }) => request.cookies.set(name, value));
           response = NextResponse.next({ request });
           items.forEach(({ name, value, options }) =>
             response.cookies.set(name, value, options),
@@ -30,7 +28,11 @@ export async function proxy(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user && request.nextUrl.pathname.startsWith("/dashboard")) {
+  if (
+    !user &&
+    (request.nextUrl.pathname.startsWith("/dashboard") ||
+      request.nextUrl.pathname.startsWith("/onboarding"))
+  ) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
   if (user && request.nextUrl.pathname === "/login") {
@@ -40,4 +42,6 @@ export async function proxy(request: NextRequest) {
   return response;
 }
 
-export const config = { matcher: ["/dashboard/:path*", "/login"] };
+export const config = {
+  matcher: ["/dashboard/:path*", "/onboarding", "/login"],
+};

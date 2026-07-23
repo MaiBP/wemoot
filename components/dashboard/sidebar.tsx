@@ -8,6 +8,7 @@ import {
   Plus,
   Users,
   UserCog,
+  CircleUserRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
@@ -17,6 +18,7 @@ const links = [
   { href: "/dashboard/events", label: "Eventos", icon: CalendarDays },
   { href: "/dashboard/participants", label: "Inscritos", icon: Users },
   { href: "/dashboard/team", label: "Equipo", icon: UserCog },
+  { href: "/onboarding?edit=1", label: "Mi perfil", icon: CircleUserRound },
 ];
 export function Sidebar() {
   const path = usePathname();

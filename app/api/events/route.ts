@@ -42,12 +42,29 @@ export async function POST(request: Request) {
     .order("created_at")
     .limit(1)
     .maybeSingle();
+  const { data: selectedLocation } = parsed.data.location_id
+    ? await supabase
+        .from("organization_locations")
+        .select("id,name,address_line_1,city")
+        .eq("id", parsed.data.location_id)
+        .maybeSingle()
+    : { data: null };
+  if (parsed.data.location_id && !selectedLocation)
+    return NextResponse.json(
+      { error: "Ubicación no disponible" },
+      { status: 400 },
+    );
   const { data, error } = await supabase
     .from("events")
     .insert({
       ...parsed.data,
       description: parsed.data.description || null,
-      location: parsed.data.location || null,
+      location:
+        selectedLocation?.name ||
+        selectedLocation?.address_line_1 ||
+        parsed.data.location ||
+        null,
+      city: selectedLocation?.city || parsed.data.city,
       schedule: parsed.data.schedule || null,
       age_range: parsed.data.age_range || null,
       owner_id: user.id,

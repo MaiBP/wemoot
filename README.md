@@ -80,6 +80,14 @@ Las respuestas médicas se almacenan separadas de los datos generales. Sólo pro
 
 Para activar los emails transaccionales configura `RESEND_API_KEY` y `EMAIL_FROM` en Vercel. `EMAIL_FROM` debe utilizar un dominio validado en Resend, por ejemplo `WeMoot <notificaciones@wemoot.com>`. Si no se configuran todavía, la inscripción y el pago continúan funcionando y el envío queda en cola.
 
+### Onboarding unificado
+
+Ejecuta `supabase/migrations/009_unified_onboarding.sql` después de la migración 008. Añade el tipo de perfil, progreso de onboarding, datos profesionales, información ampliada de organizaciones, ubicaciones reutilizables y la relación opcional entre una ubicación y un evento.
+
+La ruta `/onboarding` guarda cada paso en Supabase y permite completarlo o editarlo posteriormente. Telegram inicia el mismo flujo con `/start` cuando la cuenta está vinculada pero el perfil sigue incompleto. El teléfono y la ubicación son opcionales y pueden compartirse directamente desde Telegram.
+
+Al crear eventos desde la web o Telegram se reutilizan como sugerencias la organización, el contacto, la ciudad y la instalación predeterminada. El evento conserva además el nombre y la dirección como snapshot para que los cambios futuros del perfil no alteren eventos históricos.
+
 ## Configurar Stripe
 
 1. Añade `STRIPE_SECRET_KEY` con la clave secreta de Stripe. Para probar usa una clave `sk_test_...`.

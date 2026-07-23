@@ -18,6 +18,8 @@ export interface TelegramMessage {
     mime_type?: string;
     file_name?: string;
   };
+  contact?: { phone_number: string; first_name?: string; last_name?: string };
+  location?: { latitude: number; longitude: number };
 }
 
 export interface TelegramUpdate {
@@ -28,7 +30,7 @@ export interface TelegramUpdate {
 export async function sendTelegramMessage(
   chatId: string,
   text: string,
-  keyboard?: string[][],
+  keyboard?: TelegramKeyboardButton[][],
 ) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) throw new Error("TELEGRAM_BOT_TOKEN no está configurado");
@@ -45,7 +47,9 @@ export async function sendTelegramMessage(
           ? {
               reply_markup: {
                 keyboard: keyboard.map((row) =>
-                  row.map((value) => ({ text: value })),
+                  row.map((value) =>
+                    typeof value === "string" ? { text: value } : value,
+                  ),
                 ),
                 resize_keyboard: true,
                 one_time_keyboard: true,
@@ -57,6 +61,10 @@ export async function sendTelegramMessage(
   );
   if (!response.ok) throw new Error("Telegram rechazó el mensaje");
 }
+
+export type TelegramKeyboardButton =
+  | string
+  | { text: string; request_contact?: boolean; request_location?: boolean };
 
 export async function getTelegramImageDataUrl(message: TelegramMessage) {
   const token = process.env.TELEGRAM_BOT_TOKEN;

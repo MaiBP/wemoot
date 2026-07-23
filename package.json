@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --experimental-default-type=module --experimental-strip-types --test tests/pricing.test.ts tests/forms.test.ts tests/capacity.test.ts tests/telegram.test.ts tests/security.test.ts"
+    "test": "node --experimental-default-type=module --experimental-strip-types --test tests/pricing.test.ts tests/forms.test.ts tests/capacity.test.ts tests/telegram.test.ts tests/security.test.ts tests/onboarding.test.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.3.0",
