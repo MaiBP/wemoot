@@ -72,6 +72,14 @@ Ejecuta `supabase/migrations/007_telegram_complex_flow_phase5.sql` después de l
 
 Al detectar un evento complejo, el bot abre un menú para crear programas, generar o introducir semanas, interpretar precios, importar más información y elegir el formulario. Las tarifas interpretadas por OpenAI siempre se presentan para confirmación; sólo después se convierten en reglas deterministas. Las plantillas disponibles son Campus completo, Formulario básico y Formulario personalizado. El resultado se guarda como borrador y se publica desde el dashboard después de revisar su configuración.
 
+### Fase 6: privacidad, equipos y comunicaciones
+
+Ejecuta `supabase/migrations/008_privacy_permissions_phase6.sql` después de la migración 007. La migración crea un equipo predeterminado para cada propietario, incorpora los roles propietario, administrador, gestor de inscripciones, entrenador, personal médico y visor, y aplica permisos RLS según la responsabilidad.
+
+Las respuestas médicas se almacenan separadas de los datos generales. Sólo propietarios, administradores y personal médico pueden exportarlas; cada exportación queda auditada. El dashboard permite gestionar el equipo, filtrar inscripciones y descargar CSV generados en el servidor. Los emails de inscripción y pago usan una cola idempotente y nunca incluyen información médica.
+
+Para activar los emails transaccionales configura `RESEND_API_KEY` y `EMAIL_FROM` en Vercel. `EMAIL_FROM` debe utilizar un dominio validado en Resend, por ejemplo `WeMoot <notificaciones@wemoot.com>`. Si no se configuran todavía, la inscripción y el pago continúan funcionando y el envío queda en cola.
+
 ## Configurar Stripe
 
 1. Añade `STRIPE_SECRET_KEY` con la clave secreta de Stripe. Para probar usa una clave `sk_test_...`.
@@ -89,6 +97,8 @@ La opción tarjeta redirige al Checkout alojado por Stripe, por lo que no se nec
 - `NEXT_PUBLIC_SUPABASE_URL`: URL pública del proyecto.
 - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`: clave pública usada por Auth y por las operaciones protegidas con RLS.
 - `SUPABASE_SECRET_KEY`: clave privada, utilizada únicamente por el webhook de Telegram para sus operaciones administrativas. Nunca debe llevar el prefijo `NEXT_PUBLIC_`.
+- `RESEND_API_KEY`: clave privada para enviar confirmaciones de inscripción y pago.
+- `EMAIL_FROM`: remitente validado, incluyendo opcionalmente el nombre visible.
 
 No se necesita `SUPABASE_JWKS_URL` en esta aplicación. El SDK de Supabase
 valida y renueva las sesiones mediante `auth.getUser()`. La URL JWKS solo sería

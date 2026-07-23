@@ -449,6 +449,13 @@ export async function POST(request: Request) {
         0,
       );
       const saveOnly = /^guardar borrador$/i.test(text);
+      const { data: organization } = await admin
+        .from("organizations")
+        .select("id")
+        .eq("owner_id", profileId)
+        .order("created_at")
+        .limit(1)
+        .maybeSingle();
       const { data: event, error } = await admin
         .from("events")
         .insert({
@@ -461,7 +468,7 @@ export async function POST(request: Request) {
             : (parsed.data as { capacity: number }).capacity,
           ...(isAdvanced ? { event_mode: "advanced" } : {}),
           owner_id: profileId,
-          organization_id: null,
+          organization_id: organization?.id ?? null,
           slug: createSlug(parsed.data.title),
           payment_mode: "manual",
           status: isAdvanced || saveOnly ? "draft" : "published",

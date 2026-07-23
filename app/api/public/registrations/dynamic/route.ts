@@ -16,6 +16,8 @@ import {
   validateParticipant,
   validateRequiredAnswers,
 } from "@/lib/forms/validate-registration";
+import { sendRegistrationEmail } from "@/lib/email/registration-email";
+import { partitionRegistrationAnswers } from "@/lib/forms/partition-answers";
 
 const text = (value: unknown) =>
   typeof value === "string" ? value.trim() : "";
@@ -188,8 +190,8 @@ export async function POST(request: Request) {
         guardian_name: text(answers.guardian_name) || null,
         current_club: text(answers.current_club) || null,
         shirt_size: text(answers.shirt_size) || null,
-        allergies: text(answers.allergies) || null,
-        medical_notes: text(answers.medical_notes) || null,
+        allergies: null,
+        medical_notes: null,
         image_consent: answers.image_consent === true,
         notes: text(answers.notes) || null,
         total_amount: calculation.finalAmount / 100,
@@ -208,22 +210,11 @@ export async function POST(request: Request) {
       .single();
     if (registrationError) throw registrationError;
     createdId = registration.id;
-    const fieldMap = new Map(
-      (fields ?? []).map((field) => [field.field_key, field]),
+    const partitionedAnswers = partitionRegistrationAnswers(
+      registration.id,
+      answers,
+      fields ?? [],
     );
-    const answerRows = Object.entries(answers).flatMap(([key, answer]) => {
-      const field = fieldMap.get(key);
-      return field
-        ? [
-            {
-              registration_id: registration.id,
-              field_id: field.id,
-              field_key: key,
-              answer,
-            },
-          ]
-        : [];
-    });
     const perPeriod =
       Math.round(calculation.finalAmount / input.period_ids.length) / 100;
     const consentRows = (fields ?? []).flatMap((field) => {
@@ -250,9 +241,19 @@ export async function POST(request: Request) {
       ];
     });
     const writes = await Promise.all([
-      answerRows.length
-        ? admin.from("registration_answers").insert(answerRows)
+      partitionedAnswers.general.length
+        ? admin.from("registration_answers").insert(partitionedAnswers.general)
         : Promise.resolve({ error: null }),
+      partitionedAnswers.sensitive.length
+        ? admin
+            .from("registration_sensitive_answers")
+            .insert(partitionedAnswers.sensitive)
+        : Promise.resolve({ error: null }),
+      admin.from("registration_sensitive_data").insert({
+        registration_id: registration.id,
+        allergies: text(answers.allergies) || null,
+        medical_notes: text(answers.medical_notes) || null,
+      }),
       admin.from("registration_periods").insert(
         input.period_ids.map((period_id) => ({
           registration_id: registration.id,
@@ -311,6 +312,11 @@ export async function POST(request: Request) {
     });
     if (method !== "stripe") {
       await confirmCapacity(admin, registration.id);
+      await sendRegistrationEmail(
+        admin,
+        registration.id,
+        "registration_received",
+      );
       return NextResponse.json({
         success_url: `${appUrl(request)}/events/${event.slug}/register/success?method=${method}`,
       });

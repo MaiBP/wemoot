@@ -3,6 +3,7 @@ import type Stripe from "stripe";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { cancelCapacity, confirmCapacity } from "@/lib/capacity/reservations";
 import { getStripe } from "@/lib/stripe";
+import { sendRegistrationEmail } from "@/lib/email/registration-email";
 
 async function updatePayment(
   session: Stripe.Checkout.Session,
@@ -79,6 +80,8 @@ async function updatePayment(
   ]);
   const updateError = registrationUpdate.error ?? paymentUpdate.error;
   if (updateError) throw updateError;
+  if (status === "paid")
+    await sendRegistrationEmail(admin, registrationId, "payment_confirmed");
 }
 
 export async function POST(request: Request) {

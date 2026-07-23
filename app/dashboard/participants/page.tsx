@@ -1,12 +1,24 @@
 import { createClient } from "@/lib/supabase/server";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { resolveEventPermissions } from "@/lib/auth/permissions";
 export default async function ParticipantsPage() {
   const supabase = await createClient();
   const { data: events = [] } = await supabase
     .from("events")
     .select("id,title");
-  const ids = (events ?? []).map((e) => e.id);
+  const accessEntries = await Promise.all(
+    (events ?? []).map(async (event) => {
+      const { data: role } = await supabase.rpc("get_event_role", {
+        target_event_id: event.id,
+      });
+      return [event.id, resolveEventPermissions(role)] as const;
+    }),
+  );
+  const access = new Map(accessEntries);
+  const ids = (events ?? [])
+    .filter((event) => access.get(event.id)?.canViewRegistrations)
+    .map((event) => event.id);
   const { data: registrations = [] } = ids.length
     ? await supabase
         .from("registrations")
@@ -46,20 +58,28 @@ export default async function ParticipantsPage() {
                       <td className="py-4 font-medium">{r.participant_name}</td>
                       <td>{names[r.event_id]}</td>
                       <td className="text-brand-black/60">
-                        {r.participant_email || r.participant_phone || "—"}
+                        {access.get(r.event_id)?.canManageRegistrations
+                          ? r.participant_email || r.participant_phone || "—"
+                          : "Acceso restringido"}
                       </td>
                       <td>
-                        <Badge
-                          variant={
-                            r.payment_status === "paid"
-                              ? "success"
-                              : r.payment_status === "cancelled"
-                                ? "danger"
-                                : "warning"
-                          }
-                        >
-                          {r.payment_status}
-                        </Badge>
+                        {access.get(r.event_id)?.canViewPayments ? (
+                          <Badge
+                            variant={
+                              r.payment_status === "paid"
+                                ? "success"
+                                : r.payment_status === "cancelled"
+                                  ? "danger"
+                                  : "warning"
+                            }
+                          >
+                            {r.payment_status}
+                          </Badge>
+                        ) : (
+                          <span className="text-brand-black/45">
+                            Restringido
+                          </span>
+                        )}
                       </td>
                     </tr>
                   ))}

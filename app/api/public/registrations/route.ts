@@ -17,6 +17,7 @@ import {
   publicRegistrationSchema,
   registrationSchema,
 } from "@/lib/validations";
+import { sendRegistrationEmail } from "@/lib/email/registration-email";
 
 function appUrl(request: Request) {
   return (
@@ -270,8 +271,8 @@ export async function POST(request: Request) {
         club_member: parsed.data.club_member ?? null,
         current_club: parsed.data.current_club ?? null,
         shirt_size: parsed.data.shirt_size ?? null,
-        allergies: parsed.data.allergies ?? null,
-        medical_notes: parsed.data.medical_notes ?? null,
+        allergies: null,
+        medical_notes: null,
         image_consent: parsed.data.image_consent,
         program_id: selectedProgram?.id ?? null,
         participant_type: participantType,
@@ -290,6 +291,18 @@ export async function POST(request: Request) {
       .single();
     if (registrationError) throw registrationError;
     createdId = created.id;
+
+    const { error: sensitiveDataError } = await admin
+      .from("registration_sensitive_data")
+      .insert({
+        registration_id: created.id,
+        allergies: parsed.data.allergies ?? null,
+        medical_notes: parsed.data.medical_notes ?? null,
+      });
+    if (sensitiveDataError) {
+      await admin.from("registrations").delete().eq("id", created.id);
+      throw sensitiveDataError;
+    }
 
     if (priceCalculation) {
       const { error: snapshotError } = await admin
@@ -379,6 +392,7 @@ export async function POST(request: Request) {
 
     if (isFree || !requiresPaymentNow || payment_method === "cash") {
       if (selectedProgram) await confirmCapacity(admin, created.id);
+      await sendRegistrationEmail(admin, created.id, "registration_received");
       return NextResponse.json({
         success_url: `${appUrl(request)}/events/${event.slug}/register/success?method=${isFree ? "free" : !requiresPaymentNow ? "reserve" : "cash"}`,
       });

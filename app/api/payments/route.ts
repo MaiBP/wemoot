@@ -7,6 +7,8 @@ import {
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { paymentUpdateSchema } from "@/lib/validations";
+import { sendRegistrationEmail } from "@/lib/email/registration-email";
+import { resolveEventPermissions } from "@/lib/auth/permissions";
 
 export async function PATCH(request: Request) {
   const supabase = await createClient();
@@ -30,6 +32,14 @@ export async function PATCH(request: Request) {
     return NextResponse.json(
       { error: currentError?.message ?? "Inscripción no encontrada" },
       { status: 404 },
+    );
+  const { data: role } = await supabase.rpc("get_event_role", {
+    target_event_id: current.event_id,
+  });
+  if (!resolveEventPermissions(role).canManageRegistrations)
+    return NextResponse.json(
+      { error: "No tienes permiso para gestionar pagos" },
+      { status: 403 },
     );
 
   try {
@@ -73,6 +83,11 @@ export async function PATCH(request: Request) {
       },
       { onConflict: "registration_id" },
     );
+    const admin = createAdminClient();
+    if (parsed.data.status === "paid")
+      await sendRegistrationEmail(admin, data.id, "payment_confirmed");
+    else if (parsed.data.status === "cancelled")
+      await sendRegistrationEmail(admin, data.id, "registration_cancelled");
   }
   return NextResponse.json(
     error ? { error: error.message } : { registration: data },

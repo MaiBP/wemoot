@@ -7,6 +7,7 @@ import {
   LogOut,
   Plus,
   Users,
+  UserCog,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
@@ -15,6 +16,7 @@ const links = [
   { href: "/dashboard", label: "Resumen", icon: LayoutDashboard },
   { href: "/dashboard/events", label: "Eventos", icon: CalendarDays },
   { href: "/dashboard/participants", label: "Inscritos", icon: Users },
+  { href: "/dashboard/team", label: "Equipo", icon: UserCog },
 ];
 export function Sidebar() {
   const path = usePathname();

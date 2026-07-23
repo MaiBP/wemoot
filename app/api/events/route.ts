@@ -36,6 +36,12 @@ export async function POST(request: Request) {
     social_copy: `⚽ ${parsed.data.title}\n📍 ${parsed.data.city}\n📅 ${parsed.data.start_date}\n¡Reserva tu plaza!`,
     whatsapp_message: `Hola, abrimos inscripciones para ${parsed.data.title} en ${parsed.data.city}.`,
   }));
+  const { data: organization } = await supabase
+    .from("organizations")
+    .select("id")
+    .order("created_at")
+    .limit(1)
+    .maybeSingle();
   const { data, error } = await supabase
     .from("events")
     .insert({
@@ -45,7 +51,7 @@ export async function POST(request: Request) {
       schedule: parsed.data.schedule || null,
       age_range: parsed.data.age_range || null,
       owner_id: user.id,
-      organization_id: null,
+      organization_id: organization?.id ?? null,
       slug: createSlug(parsed.data.title),
       status: "draft",
       payment_mode: "manual",
@@ -98,16 +104,16 @@ export async function PATCH(request: Request) {
           .select("id", { count: "exact", head: true })
           .eq("event_id", body.id)
           .eq("active", true),
-          supabase
-            .from("event_price_rules")
+        supabase
+          .from("event_price_rules")
           .select("id", { count: "exact", head: true })
           .eq("event_id", body.id)
-            .eq("is_active", true),
-          supabase
-            .from("registration_forms")
-            .select("id", { count: "exact", head: true })
-            .eq("event_id", body.id)
-            .eq("status", "published"),
+          .eq("is_active", true),
+        supabase
+          .from("registration_forms")
+          .select("id", { count: "exact", head: true })
+          .eq("event_id", body.id)
+          .eq("status", "published"),
         programIds.length
           ? supabase
               .from("event_program_periods")

@@ -11,6 +11,7 @@ import { CopyBox } from "@/components/events/copy-box";
 import { RegistrationManager } from "@/components/events/registration-manager";
 import { AdvancedEventManager } from "@/components/events/advanced-event-manager";
 import { PricingRulesManager } from "@/components/events/pricing-rules-manager";
+import { resolveEventPermissions, roleLabels } from "@/lib/auth/permissions";
 import type {
   EventDiscount,
   EventPriceRule,
@@ -30,20 +31,34 @@ export default async function EventDetailPage({
     .eq("id", id)
     .single();
   if (!event) notFound();
+  const [{ data: role }, { data: statsRows }] = await Promise.all([
+    supabase.rpc("get_event_role", { target_event_id: id }),
+    supabase.rpc("get_event_registration_stats", { target_event_id: id }),
+  ]);
+  const permissions = resolveEventPermissions(role);
+  const stats = statsRows?.[0] ?? {
+    total: 0,
+    paid: 0,
+    pending: 0,
+    cancelled: 0,
+    revenue: 0,
+  };
   const advanced = event.event_mode === "advanced";
-  const registrationsResult = advanced
-    ? await supabase
-        .from("registrations")
-        .select(
-          "*, event_programs(name), registration_periods(event_periods(label)), registration_items(amount, event_programs(name), event_periods(label), event_prices(label))",
-        )
-        .eq("event_id", id)
-        .order("created_at", { ascending: false })
-    : await supabase
-        .from("registrations")
-        .select("*")
-        .eq("event_id", id)
-        .order("created_at", { ascending: false });
+  const registrationsResult = !permissions.canViewRegistrations
+    ? { data: [] }
+    : advanced
+      ? await supabase
+          .from("registrations")
+          .select(
+            "*, event_programs(name), registration_periods(event_periods(label)), registration_items(amount, event_programs(name), event_periods(label), event_prices(label))",
+          )
+          .eq("event_id", id)
+          .order("created_at", { ascending: false })
+      : await supabase
+          .from("registrations")
+          .select("*")
+          .eq("event_id", id)
+          .order("created_at", { ascending: false });
   const registrations = (registrationsResult.data ??
     []) as RegistrationRecord[];
   const [{ data: programs = [] }, { data: periods = [] }] = advanced
@@ -94,6 +109,7 @@ export default async function EventDetailPage({
             >
               {event.status}
             </Badge>
+            {permissions.role && <Badge>{roleLabels[permissions.role]}</Badge>}
           </div>
           <h1 className="text-3xl font-bold tracking-tight">{event.title}</h1>
           <p className="mt-2 text-sm text-brand-black/60">
@@ -101,11 +117,13 @@ export default async function EventDetailPage({
             {event.created_from === "telegram" ? "Telegram" : "la web"}
           </p>
         </div>
-        <EventActions id={event.id} status={event.status} />
+        {permissions.canManageEvent && (
+          <EventActions id={event.id} status={event.status} />
+        )}
       </header>
       <div className="grid gap-6 xl:grid-cols-[1.4fr_.8fr]">
         <div className="space-y-6">
-          {advanced && (
+          {advanced && permissions.canManageEvent && (
             <Card>
               <CardHeader>
                 <CardTitle>Configuración avanzada del campus</CardTitle>
@@ -122,7 +140,7 @@ export default async function EventDetailPage({
               </CardContent>
             </Card>
           )}
-          {advanced && (
+          {advanced && permissions.canManageEvent && (
             <Card>
               <CardHeader>
                 <CardTitle>Precios y descuentos</CardTitle>
@@ -199,16 +217,29 @@ export default async function EventDetailPage({
               <CardTitle>Inscritos y pagos</CardTitle>
             </CardHeader>
             <CardContent>
-              <RegistrationManager
-                eventId={event.id}
-                eventTitle={event.title}
-                registrations={registrations ?? []}
-              />
+              {permissions.canViewRegistrations ? (
+                <RegistrationManager
+                  eventId={event.id}
+                  eventTitle={event.title}
+                  registrations={registrations ?? []}
+                  canManage={permissions.canManageRegistrations}
+                  canViewPayments={permissions.canViewPayments}
+                  canExportParticipants={permissions.canExportParticipants}
+                  canExportMedical={permissions.canExportMedical}
+                />
+              ) : (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Stat label="Inscripciones" value={stats.total} />
+                  <Stat label="Pagadas" value={stats.paid} />
+                  <Stat label="Pendientes" value={stats.pending} />
+                  <Stat label="Canceladas" value={stats.cancelled} />
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
         <aside className="space-y-6">
-          {advanced && (
+          {advanced && permissions.canManageForms && (
             <Card>
               <CardHeader>
                 <CardTitle>Formulario de inscripción</CardTitle>
@@ -265,6 +296,17 @@ export default async function EventDetailPage({
           </Card>
         </aside>
       </div>
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="rounded-xl bg-brand-black/[0.04] p-4">
+      <span className="block text-xs uppercase tracking-wide text-brand-black/50">
+        {label}
+      </span>
+      <strong className="mt-1 block text-2xl">{value}</strong>
     </div>
   );
 }

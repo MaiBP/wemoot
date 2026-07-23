@@ -12,15 +12,21 @@ export default async function DashboardPage() {
     .from("events")
     .select("*")
     .order("start_date", { ascending: true });
-  const eventIds = (events ?? []).map((e) => e.id);
-  const { data: registrations = [] } = eventIds.length
-    ? await supabase.from("registrations").select("*").in("event_id", eventIds)
-    : { data: [] };
-  const paid = (registrations ?? []).filter((r) => r.payment_status === "paid");
-  const estimated = paid.reduce(
-    (sum, r) =>
-      sum + Number((events ?? []).find((e) => e.id === r.event_id)?.price ?? 0),
-    0,
+  const stats = await Promise.all(
+    (events ?? []).map(async (event) => {
+      const { data } = await supabase.rpc("get_event_registration_stats", {
+        target_event_id: event.id,
+      });
+      return data?.[0] ?? { total: 0, pending: 0, revenue: 0 };
+    }),
+  );
+  const totals = stats.reduce(
+    (result, item) => ({
+      registrations: result.registrations + Number(item.total ?? 0),
+      pending: result.pending + Number(item.pending ?? 0),
+      revenue: result.revenue + Number(item.revenue ?? 0),
+    }),
+    { registrations: 0, pending: 0, revenue: 0 },
   );
   return (
     <div className="mx-auto max-w-7xl">
@@ -43,20 +49,17 @@ export default async function DashboardPage() {
         />
         <StatCard
           label="Total inscritos"
-          value={(registrations ?? []).length}
+          value={totals.registrations}
           icon={Users}
         />
         <StatCard
           label="Pagos pendientes"
-          value={
-            (registrations ?? []).filter((r) => r.payment_status === "pending")
-              .length
-          }
+          value={totals.pending}
           icon={Clock3}
         />
         <StatCard
           label="Ingresos confirmados"
-          value={formatCurrency(estimated)}
+          value={formatCurrency(totals.revenue)}
           icon={CircleDollarSign}
         />
       </section>

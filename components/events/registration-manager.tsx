@@ -1,25 +1,70 @@
 "use client";
-import { useState } from "react";
+
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Download, Search, ShieldCheck } from "lucide-react";
 import type { RegistrationRecord } from "@/types/event";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+
 export function RegistrationManager({
   eventId,
-  eventTitle,
   registrations,
+  canManage,
+  canViewPayments,
+  canExportParticipants,
+  canExportMedical,
 }: {
   eventId: string;
   eventTitle: string;
   registrations: RegistrationRecord[];
+  canManage: boolean;
+  canViewPayments: boolean;
+  canExportParticipants: boolean;
+  canExportMedical: boolean;
 }) {
   const router = useRouter();
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [query, setQuery] = useState("");
+  const [paymentFilter, setPaymentFilter] = useState("all");
+  const [programFilter, setProgramFilter] = useState("all");
+
+  const programNames = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          registrations
+            .map((registration) => programName(registration))
+            .filter((value): value is string => Boolean(value)),
+        ),
+      ).sort(),
+    [registrations],
+  );
+  const filtered = useMemo(() => {
+    const normalizedQuery = query.trim().toLocaleLowerCase("es");
+    return registrations.filter((registration) => {
+      const matchesQuery =
+        !normalizedQuery ||
+        registration.participant_name
+          .toLocaleLowerCase("es")
+          .includes(normalizedQuery) ||
+        registration.participant_email
+          ?.toLocaleLowerCase("es")
+          .includes(normalizedQuery);
+      const matchesPayment =
+        paymentFilter === "all" ||
+        registration.payment_status === paymentFilter;
+      const matchesProgram =
+        programFilter === "all" || programName(registration) === programFilter;
+      return matchesQuery && matchesPayment && matchesProgram;
+    });
+  }, [paymentFilter, programFilter, query, registrations]);
+
   async function add(formData: FormData) {
     setBusy(true);
-    await fetch("/api/registrations", {
+    const response = await fetch("/api/registrations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -27,93 +72,76 @@ export function RegistrationManager({
         event_id: eventId,
       }),
     });
-    setAdding(false);
+    const result = await response.json();
+    if (!response.ok)
+      alert(result.error ?? "No se pudo guardar la inscripción");
+    else setAdding(false);
     setBusy(false);
     router.refresh();
   }
+
   async function setStatus(id: string, status: string) {
-    await fetch("/api/payments", {
+    const response = await fetch("/api/payments", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ registration_id: id, status }),
     });
+    const result = await response.json();
+    if (!response.ok) alert(result.error ?? "No se pudo cambiar el estado");
     router.refresh();
   }
-  function exportCsv() {
-    const esc = (v: unknown) => `"${String(v ?? "").replaceAll('"', '""')}"`;
-    const rows = [
-      [
-        "Nombre",
-        "Email",
-        "Teléfono",
-        "Edad",
-        "Pago",
-        "Modalidad",
-        "Periodo",
-        "Tarifa",
-      ],
-      ...registrations.map((r) => [
-        r.participant_name,
-        r.participant_email,
-        r.participant_phone,
-        r.participant_age,
-        r.payment_status,
-        r.registration_items?.[0]?.event_programs?.name ??
-          r.event_programs?.name,
-        r.registration_items?.[0]?.event_periods?.label ??
-          r.registration_periods
-            ?.map((item) => item.event_periods?.label)
-            .filter(Boolean)
-            .join(" | "),
-        r.registration_items?.[0]?.event_prices?.label,
-      ]),
-    ];
-    const blob = new Blob(
-      ["\uFEFF" + rows.map((row) => row.map(esc).join(",")).join("\n")],
-      { type: "text/csv;charset=utf-8" },
-    );
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${eventTitle.toLowerCase().replace(/\W+/g, "-")}-inscritos.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
+
   async function certificates() {
     setBusy(true);
-    const r = await fetch("/api/certificates", {
+    const response = await fetch("/api/certificates", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ event_id: eventId }),
     });
-    const data = await r.json();
-    alert(`${data.prepared ?? 0} certificados preparados.`);
+    const result = await response.json();
+    alert(
+      response.ok
+        ? `${result.prepared ?? 0} certificados preparados.`
+        : (result.error ?? "No se pudieron preparar los certificados"),
+    );
     setBusy(false);
   }
+
   return (
     <div>
       <div className="mb-4 flex flex-wrap gap-2">
-        <Button size="sm" onClick={() => setAdding(!adding)}>
-          Añadir inscrito
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={exportCsv}
-          disabled={!registrations.length}
-        >
-          Exportar CSV
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={certificates}
-          disabled={busy || !registrations.length}
-        >
-          Preparar certificados
-        </Button>
+        {canManage && (
+          <Button size="sm" onClick={() => setAdding(!adding)}>
+            Añadir inscrito
+          </Button>
+        )}
+        {canExportParticipants && registrations.length > 0 && (
+          <Button size="sm" variant="outline" asChild>
+            <a href={`/api/events/${eventId}/exports?type=participants`}>
+              <Download className="size-4" /> Exportar participantes
+            </a>
+          </Button>
+        )}
+        {canExportMedical && registrations.length > 0 && (
+          <Button size="sm" variant="outline" asChild>
+            <a href={`/api/events/${eventId}/exports?type=medical`}>
+              <ShieldCheck className="size-4" /> Exportación médica
+            </a>
+          </Button>
+        )}
+        {canManage && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={certificates}
+            disabled={busy || !registrations.length}
+          >
+            Preparar certificados
+          </Button>
+        )}
       </div>
-      {adding && (
+
+      {adding && canManage && (
         <form
           action={add}
           className="mb-5 grid gap-3 rounded-xl bg-brand-black/[0.03] p-4 md:grid-cols-2"
@@ -141,9 +169,54 @@ export function RegistrationManager({
           </div>
         </form>
       )}
+
+      {registrations.length > 0 && (
+        <div className="mb-4 grid gap-2 md:grid-cols-[minmax(220px,1fr)_180px_220px]">
+          <label className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-brand-black/40" />
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Buscar participante o email"
+              className="pl-9"
+            />
+          </label>
+          {canViewPayments && (
+            <select
+              value={paymentFilter}
+              onChange={(event) => setPaymentFilter(event.target.value)}
+              className="rounded-lg border border-brand-black/15 bg-white px-3 text-sm"
+              aria-label="Filtrar por pago"
+            >
+              <option value="all">Todos los pagos</option>
+              <option value="pending">Pendientes</option>
+              <option value="paid">Pagados</option>
+              <option value="cancelled">Cancelados</option>
+            </select>
+          )}
+          {programNames.length > 0 && (
+            <select
+              value={programFilter}
+              onChange={(event) => setProgramFilter(event.target.value)}
+              className="rounded-lg border border-brand-black/15 bg-white px-3 text-sm"
+              aria-label="Filtrar por programa"
+            >
+              <option value="all">Todos los programas</option>
+              {programNames.map((name) => (
+                <option key={name}>{name}</option>
+              ))}
+            </select>
+          )}
+        </div>
+      )}
+
       {!registrations.length ? (
         <p className="py-8 text-center text-sm text-brand-black/60">
           Todavía no hay inscritos.
+        </p>
+      ) : !filtered.length ? (
+        <p className="py-8 text-center text-sm text-brand-black/60">
+          No hay resultados para estos filtros.
         </p>
       ) : (
         <div className="overflow-x-auto">
@@ -152,70 +225,59 @@ export function RegistrationManager({
               <tr>
                 <th className="py-3">Participante</th>
                 <th>Contacto</th>
-                <th>Pago</th>
-                <th className="text-right">Cambiar estado</th>
+                {canViewPayments && <th>Pago</th>}
+                {canManage && <th className="text-right">Cambiar estado</th>}
               </tr>
             </thead>
             <tbody className="divide-y">
-              {registrations.map((r) => (
-                <tr key={r.id}>
+              {filtered.map((registration) => (
+                <tr key={registration.id}>
                   <td className="py-4 font-medium">
-                    {r.participant_name}
-                    {r.participant_age ? (
+                    {registration.participant_name}
+                    {registration.participant_age ? (
                       <span className="block text-xs font-normal text-brand-black/45">
-                        {r.participant_age} años
+                        {registration.participant_age} años
                       </span>
                     ) : null}
-                    {r.registration_items?.[0] && (
+                    {programName(registration) && (
                       <span className="block text-xs font-normal text-brand-cyan">
-                        {r.registration_items[0].event_programs?.name}
-                        {r.registration_items[0].event_periods?.label
-                          ? ` · ${r.registration_items[0].event_periods.label}`
-                          : ""}
-                        {r.registration_items[0].event_prices?.label
-                          ? ` · ${r.registration_items[0].event_prices.label}`
-                          : ""}
-                      </span>
-                    )}
-                    {!r.registration_items?.[0] && r.event_programs && (
-                      <span className="block text-xs font-normal text-brand-cyan">
-                        {r.event_programs.name}
-                        {r.registration_periods?.length
-                          ? ` · ${r.registration_periods
-                              .map((item) => item.event_periods?.label)
-                              .filter(Boolean)
-                              .join(", ")}`
+                        {programName(registration)}
+                        {periodNames(registration)
+                          ? ` · ${periodNames(registration)}`
                           : ""}
                       </span>
                     )}
                   </td>
                   <td className="text-brand-black/60">
-                    {r.participant_email || r.participant_phone || "—"}
+                    {registration.participant_email ||
+                      registration.participant_phone ||
+                      "—"}
                   </td>
-                  <td>
-                    <Badge
-                      variant={
-                        r.payment_status === "paid"
-                          ? "success"
-                          : r.payment_status === "cancelled"
-                            ? "danger"
-                            : "warning"
-                      }
-                    >
-                      {r.payment_status}
-                    </Badge>
-                  </td>
-                  <td className="text-right">
-                    <select
-                      value={r.payment_status}
-                      onChange={(e) => setStatus(r.id, e.target.value)}
-                      className="rounded-lg border border-brand-black/15 bg-white p-2 text-xs"
-                    >
-                      <option value="pending">Pendiente</option>
-                      <option value="paid">Pagado</option>
-                      <option value="cancelled">Cancelado</option>
-                    </select>
-                  </td>
+                  {canViewPayments && (
+                    <td>
+                      <Badge
+                        variant={paymentVariant(registration.payment_status)}
+                      >
+                        {registration.payment_status}
+                      </Badge>
+                    </td>
+                  )}
+                  {canManage && (
+                    <td className="text-right">
+                      <select
+                        value={registration.payment_status}
+                        onChange={(event) =>
+                          setStatus(registration.id, event.target.value)
+                        }
+                        className="rounded-lg border border-brand-black/15 bg-white p-2 text-xs"
+                        aria-label={`Estado de pago de ${registration.participant_name}`}
+                      >
+                        <option value="pending">Pendiente</option>
+                        <option value="paid">Pagado</option>
+                        <option value="cancelled">Cancelado</option>
+                      </select>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -224,4 +286,29 @@ export function RegistrationManager({
       )}
     </div>
   );
+}
+
+function programName(registration: RegistrationRecord) {
+  return (
+    registration.registration_items?.[0]?.event_programs?.name ??
+    registration.event_programs?.name ??
+    null
+  );
+}
+
+function periodNames(registration: RegistrationRecord) {
+  return (
+    registration.registration_items?.[0]?.event_periods?.label ??
+    registration.registration_periods
+      ?.map((item) => item.event_periods?.label)
+      .filter(Boolean)
+      .join(", ") ??
+    ""
+  );
+}
+
+function paymentVariant(status: RegistrationRecord["payment_status"]) {
+  if (status === "paid") return "success" as const;
+  if (status === "cancelled") return "danger" as const;
+  return "warning" as const;
 }

@@ -39,6 +39,25 @@ export const paymentUpdateSchema = z.object({
   status: z.enum(["pending", "paid", "cancelled"]),
 });
 
+export const organizationMemberSchema = z.object({
+  email: z.email(),
+  role: z.enum([
+    "admin",
+    "registration_manager",
+    "coach",
+    "medical_staff",
+    "viewer",
+  ]),
+});
+
+export const organizationMemberUpdateSchema = z.object({
+  member_id: z.uuid(),
+  role: z
+    .enum(["admin", "registration_manager", "coach", "medical_staff", "viewer"])
+    .optional(),
+  status: z.enum(["active", "disabled"]).optional(),
+});
+
 export const publicRegistrationSchema = registrationSchema.extend({
   participant_email: z.email(),
   payment_method: z.enum(["cash", "card"]),
