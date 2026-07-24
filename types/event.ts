@@ -35,6 +35,11 @@ export interface EventRecord {
   general_settings?: Record<string, unknown>;
   cancellation_policy?: string | null;
   cover_image_url?: string | null;
+  registration_mode?: "direct" | "preregistration";
+  allow_multiple_programs?: boolean;
+  preregistration_limit?: number | null;
+  payment_invitation_hours?: number;
+  payment_opened_at?: string | null;
 }
 
 export interface EventProgram {
@@ -263,7 +268,19 @@ export interface RegistrationRecord {
   payment_status: PaymentStatus;
   created_at: string;
   registration_status?:
-    "pending" | "pending_payment" | "requested" | "confirmed" | "cancelled";
+    | "pending"
+    | "pending_payment"
+    | "requested"
+    | "preregistered"
+    | "waitlisted"
+    | "payment_invited"
+    | "confirmed"
+    | "expired"
+    | "cancelled";
+  queue_position?: number | null;
+  preregistered_at?: string | null;
+  payment_invited_at?: string | null;
+  payment_expires_at?: string | null;
   participant_birth_date?: string | null;
   guardian_name?: string | null;
   club_member?: boolean | null;
@@ -277,12 +294,19 @@ export interface RegistrationRecord {
   total_amount?: number | null;
   currency?: string;
   event_programs?: { name: string } | null;
-  registration_periods?: Array<{ event_periods?: { label: string } | null }>;
+  registration_periods?: Array<{
+    event_programs?: { name: string } | null;
+    event_periods?: { label: string } | null;
+  }>;
   registration_items?: Array<{
     amount: number;
     event_programs?: { name: string } | null;
     event_periods?: { label: string } | null;
     event_prices?: { label: string } | null;
+  }>;
+  registration_programs?: Array<{
+    amount: number;
+    event_programs?: { name: string } | null;
   }>;
 }
 

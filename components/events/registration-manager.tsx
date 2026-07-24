@@ -289,21 +289,30 @@ export function RegistrationManager({
 }
 
 function programName(registration: RegistrationRecord) {
+  const programs = registration.registration_programs
+    ?.map((selection) => selection.event_programs?.name)
+    .filter(Boolean)
+    .join(" + ");
   return (
-    registration.registration_items?.[0]?.event_programs?.name ??
-    registration.event_programs?.name ??
-    null
+    programs ||
+    (registration.registration_items?.[0]?.event_programs?.name ??
+      registration.event_programs?.name ??
+      null)
   );
 }
 
 function periodNames(registration: RegistrationRecord) {
+  const periods = registration.registration_periods
+    ?.map((item) =>
+      [item.event_programs?.name, item.event_periods?.label]
+        .filter(Boolean)
+        .join(": "),
+    )
+    .filter(Boolean)
+    .join(", ");
   return (
-    registration.registration_items?.[0]?.event_periods?.label ??
-    registration.registration_periods
-      ?.map((item) => item.event_periods?.label)
-      .filter(Boolean)
-      .join(", ") ??
-    ""
+    periods ||
+    (registration.registration_items?.[0]?.event_periods?.label ?? "")
   );
 }
 

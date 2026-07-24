@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { cancelCapacity, confirmCapacity } from "@/lib/capacity/reservations";
 import { getStripe } from "@/lib/stripe";
 import { sendRegistrationEmail } from "@/lib/email/registration-email";
+import { processPreregistrationQueues } from "@/lib/preregistration/queue";
 
 async function updatePayment(
   session: Stripe.Checkout.Session,
@@ -20,7 +21,9 @@ async function updatePayment(
     await Promise.all([
       admin
         .from("registrations")
-        .select("id,event_id,program_id,total_amount,currency,payment_status")
+        .select(
+          "id,event_id,program_id,total_amount,currency,payment_status,registration_status,queue_position",
+        )
         .eq("id", registrationId)
         .eq("event_id", eventId)
         .maybeSingle(),
@@ -54,12 +57,18 @@ async function updatePayment(
       ? session.payment_intent
       : session.payment_intent?.id;
   const now = new Date().toISOString();
+  const preregistration = registration.queue_position != null;
   const [registrationUpdate, paymentUpdate] = await Promise.all([
     admin
       .from("registrations")
       .update({
         payment_status: status,
-        registration_status: status === "paid" ? "confirmed" : "cancelled",
+        registration_status:
+          status === "paid"
+            ? "confirmed"
+            : preregistration
+              ? "expired"
+              : "cancelled",
       })
       .eq("id", registrationId)
       .eq("event_id", eventId),
@@ -82,6 +91,10 @@ async function updatePayment(
   if (updateError) throw updateError;
   if (status === "paid")
     await sendRegistrationEmail(admin, registrationId, "payment_confirmed");
+  else if (preregistration) {
+    await sendRegistrationEmail(admin, registrationId, "payment_expired");
+    await processPreregistrationQueues(admin, eventId);
+  }
 }
 
 export async function POST(request: Request) {

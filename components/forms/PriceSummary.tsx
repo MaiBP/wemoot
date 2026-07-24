@@ -25,9 +25,9 @@ export function PriceSummary({
             <span>Precio base</span>
             <span>{formatCurrency(calculation.baseAmount / 100)}</span>
           </div>
-          {calculation.discounts.map((discount) => (
+          {calculation.discounts.map((discount, index) => (
             <div
-              key={discount.name}
+              key={`${discount.name}-${index}`}
               className="flex justify-between text-sm text-brand-black/60"
             >
               <span>{discount.name}</span>

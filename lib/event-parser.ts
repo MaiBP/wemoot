@@ -223,23 +223,41 @@ export function normalizeParsedEvent(
 export async function parseEventMessage(
   message: string,
   existing: Record<string, unknown> = {},
-  imageDataUrl?: string,
+  attachment?:
+    | string
+    | {
+        dataUrl: string;
+        filename: string;
+        mimeType: string;
+        kind: "image";
+      },
 ): Promise<ParsedEvent> {
   if (!process.env.OPENAI_API_KEY) return fallback(message);
 
   const openai = getOpenAI();
+  const normalizedAttachment =
+    typeof attachment === "string"
+      ? {
+          dataUrl: attachment,
+          filename: "cartel.jpg",
+          mimeType: "image/jpeg",
+          kind: "image" as const,
+        }
+      : attachment;
   const userPayload = JSON.stringify({
     existing_event: existing,
     message: message.slice(0, 4000),
   });
+  const instructions = `Eres el parser de WeMoot. Interpreta mensajes, documentos visuales y carteles en español o inglés sobre eventos de fútbol. Fecha actual: ${new Date().toISOString().slice(0, 10)}. Devuelve SOLO la estructura solicitada con intent, event, event_mode, advanced, missing_fields, social_copy y whatsapp_message. Usa event_mode="advanced" cuando haya varias modalidades, turnos, periodos o tarifas. Para advanced devuelve programs, periods, prices y uncertainties. Cada precio referencia program_name y opcionalmente period_label. audience es all, member o non_member. pricing_type es fixed, per_period, period_bundle, full_event, early_bird o manual; usa quantity_from y quantity_to para el número de semanas. turn es morning, afternoon, full_day o custom. payment_timing es immediate, reserve o deferred. Fechas YYYY-MM-DD y horas HH:mm. No inventes datos: cualquier contradicción o dato dudoso va en uncertainties. En eventos simples los campos mínimos son ${required.join(", ")}; en avanzados price y capacity se configuran por programa y no son obligatorios en event. Conserva y combina los datos existentes. Genera copy sólo cuando haya datos suficientes.`;
+
   const userMessage: OpenAI.Chat.Completions.ChatCompletionUserMessageParam = {
     role: "user",
-    content: imageDataUrl
+    content: normalizedAttachment
       ? [
           { type: "text", text: userPayload },
           {
             type: "image_url",
-            image_url: { url: imageDataUrl, detail: "high" },
+            image_url: { url: normalizedAttachment.dataUrl, detail: "high" },
           },
         ]
       : userPayload,
@@ -251,7 +269,7 @@ export async function parseEventMessage(
     messages: [
       {
         role: "system",
-        content: `Eres el parser de WeMoot. Interpreta mensajes, documentos visuales y carteles en español o inglés sobre eventos de fútbol. Fecha actual: ${new Date().toISOString().slice(0, 10)}. Devuelve SOLO JSON con intent, event, event_mode, advanced, missing_fields, social_copy y whatsapp_message. Usa event_mode="advanced" cuando haya varias modalidades, turnos, periodos o tarifas. Para advanced devuelve programs, periods, prices y uncertainties. Cada precio referencia program_name y opcionalmente period_label. audience es all, member o non_member. pricing_type es fixed, per_period, period_bundle, full_event, early_bird o manual; usa quantity_from y quantity_to para el número de semanas. turn es morning, afternoon, full_day o custom. payment_timing es immediate, reserve o deferred. Fechas YYYY-MM-DD y horas HH:mm. No inventes datos: cualquier contradicción o dato dudoso va en uncertainties. En eventos simples los campos mínimos son ${required.join(", ")}; en avanzados price y capacity se configuran por programa y no son obligatorios en event. Conserva y combina los datos existentes. Genera copy sólo cuando haya datos suficientes.`,
+        content: instructions,
       },
       userMessage,
     ],

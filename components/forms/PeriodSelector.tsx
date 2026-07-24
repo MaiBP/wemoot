@@ -6,12 +6,16 @@ export function PeriodSelector({
   programId,
   values,
   onChange,
+  showCapacity = true,
+  allowIndividualPeriods = true,
 }: {
   periods: EventPeriod[];
   relations: EventProgramPeriod[];
   programId: string;
   values: string[];
   onChange: (values: string[]) => void;
+  showCapacity?: boolean;
+  allowIndividualPeriods?: boolean;
 }) {
   const available = periods.filter((period) =>
     relations.some(
@@ -21,6 +25,44 @@ export function PeriodSelector({
         relation.is_available,
     ),
   );
+  if (!allowIndividualPeriods) {
+    const availableIds = available.map((period) => period.id);
+    const allSelected =
+      availableIds.length > 0 &&
+      availableIds.every((periodId) => values.includes(periodId));
+    const hasUnavailablePeriod =
+      showCapacity &&
+      available.some((period) => {
+        const relation = relations.find(
+          (item) =>
+            item.program_id === programId && item.period_id === period.id,
+        );
+        if (!relation || relation.capacity == null) return false;
+        return (
+          relation.capacity -
+            relation.registered_count -
+            (relation.reserved_count ?? 0) <=
+          0
+        );
+      });
+    return (
+      <fieldset>
+        <legend className="mb-2 text-sm font-medium">Periodo</legend>
+        <label className="flex items-start gap-2 rounded-xl border p-3 text-sm">
+          <input
+            type="checkbox"
+            checked={allSelected}
+            disabled={!availableIds.length || hasUnavailablePeriod}
+            onChange={(event) => onChange(event.target.checked ? availableIds : [])}
+          />
+          <span>
+            <strong className="block">Campus completo</strong>
+            Incluye todos los periodos disponibles.
+          </span>
+        </label>
+      </fieldset>
+    );
+  }
   return (
     <fieldset>
       <legend className="mb-2 text-sm font-medium">Semanas o periodos</legend>
@@ -47,7 +89,7 @@ export function PeriodSelector({
               <input
                 type="checkbox"
                 checked={values.includes(period.id)}
-                disabled={remaining === 0}
+                disabled={showCapacity && remaining === 0}
                 onChange={(event) =>
                   onChange(
                     event.target.checked
@@ -59,7 +101,11 @@ export function PeriodSelector({
               <span>
                 <strong className="block">{period.label}</strong>
                 {period.start_date}–{period.end_date} ·{" "}
-                {remaining == null ? "Disponible" : `${remaining} plazas`}
+                {!showCapacity
+                  ? "Preinscripción"
+                  : remaining == null
+                    ? "Disponible"
+                    : `${remaining} plazas`}
               </span>
             </label>
           );

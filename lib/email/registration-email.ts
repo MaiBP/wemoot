@@ -1,7 +1,12 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type RegistrationEmailType =
-  "registration_received" | "payment_confirmed" | "registration_cancelled";
+  | "registration_received"
+  | "preregistration_received"
+  | "payment_invitation"
+  | "payment_confirmed"
+  | "payment_expired"
+  | "registration_cancelled";
 
 function escapeHtml(value: unknown) {
   return String(value ?? "")
@@ -18,7 +23,13 @@ function emailCopy(
     participant_name: string;
     total_amount: number | null;
     currency: string | null;
-    events: { title: string } | Array<{ title: string }> | null;
+    queue_position: number | null;
+    public_token: string;
+    payment_expires_at: string | null;
+    events:
+      | { title: string; slug: string }
+      | Array<{ title: string; slug: string }>
+      | null;
     event_programs: { name: string } | Array<{ name: string }> | null;
   },
 ) {
@@ -29,6 +40,7 @@ function emailCopy(
     currency: registration.currency ?? "EUR",
   }).format(Number(registration.total_amount ?? 0));
   const detail = program ? `${eventTitle} · ${program}` : eventTitle;
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/$/, "");
 
   if (type === "payment_confirmed")
     return {
@@ -41,6 +53,34 @@ function emailCopy(
       subject: `Inscripción cancelada · ${eventTitle}`,
       heading: "Inscripción cancelada",
       message: `La inscripción para ${detail} ha sido cancelada. Contacta con la organización si necesitas ayuda.`,
+    };
+  if (type === "preregistration_received")
+    return {
+      subject: `Preinscripción recibida · ${eventTitle}`,
+      heading: "Preinscripción recibida",
+      message: `Tu posición provisional es la ${registration.queue_position ?? "pendiente"}. Te avisaremos cuando puedas realizar el pago; la plaza todavía no está garantizada.`,
+    };
+  if (type === "payment_invitation") {
+    const deadline = registration.payment_expires_at
+      ? new Intl.DateTimeFormat("es-ES", {
+          dateStyle: "long",
+          timeStyle: "short",
+          timeZone: "Europe/Madrid",
+        }).format(new Date(registration.payment_expires_at))
+      : "la fecha indicada";
+    return {
+      subject: `Ya puedes pagar · ${eventTitle}`,
+      heading: "Ya puedes confirmar tu plaza",
+      message: `Ya puedes completar el pago de tu inscripción para ${detail}. Tienes hasta ${deadline}; después la plaza pasará a la siguiente persona.`,
+      actionUrl: `${appUrl}/pay/${registration.public_token}`,
+      actionLabel: "Pagar ahora",
+    };
+  }
+  if (type === "payment_expired")
+    return {
+      subject: `Plazo de pago finalizado · ${eventTitle}`,
+      heading: "El plazo de pago ha finalizado",
+      message: `La plaza para ${detail} ha pasado a la siguiente persona de la lista porque no recibimos el pago dentro del plazo.`,
     };
   return {
     subject: `Inscripción recibida · ${eventTitle}`,
@@ -62,7 +102,7 @@ export async function sendRegistrationEmail(
   const { data: registration, error: registrationError } = await admin
     .from("registrations")
     .select(
-      "id,event_id,participant_name,participant_email,total_amount,currency,events(title),event_programs(name)",
+      "id,event_id,participant_name,participant_email,total_amount,currency,queue_position,public_token,payment_expires_at,events(title,slug),event_programs(name)",
     )
     .eq("id", registrationId)
     .maybeSingle();
@@ -118,7 +158,11 @@ export async function sendRegistrationEmail(
   if (!claim.data) return { status: "sending" as const };
 
   const copy = emailCopy(type, registration);
-  const html = `<!doctype html><html lang="es"><body style="margin:0;background:#f7f7f7;font-family:Arial,sans-serif;color:#000300"><div style="max-width:600px;margin:32px auto;background:#fff;border-radius:16px;overflow:hidden"><div style="height:8px;background:linear-gradient(90deg,#FF01FB 0 33%,#02A9EA 33% 66%,#FAFF00 66%)"></div><div style="padding:32px"><div style="font-size:28px;font-weight:800">We<span style="color:#02A9EA">Moot</span></div><h1 style="font-size:24px;margin:28px 0 12px">${escapeHtml(copy.heading)}</h1><p style="font-size:16px;line-height:1.6">Hola ${escapeHtml(registration.participant_name)},</p><p style="font-size:16px;line-height:1.6">${escapeHtml(copy.message)}</p><p style="margin-top:30px;color:#666;font-size:13px">Este mensaje no incluye datos médicos ni respuestas sensibles.</p></div></div></body></html>`;
+  const action =
+    "actionUrl" in copy && copy.actionUrl
+      ? `<p style="margin:28px 0"><a href="${escapeHtml(copy.actionUrl)}" style="display:inline-block;background:#02A9EA;color:#000300;padding:14px 22px;border-radius:10px;text-decoration:none;font-weight:700">${escapeHtml(copy.actionLabel)}</a></p>`
+      : "";
+  const html = `<!doctype html><html lang="es"><body style="margin:0;background:#f7f7f7;font-family:Arial,sans-serif;color:#000300"><div style="max-width:600px;margin:32px auto;background:#fff;border-radius:16px;overflow:hidden"><div style="height:8px;background:linear-gradient(90deg,#FF01FB 0 33%,#02A9EA 33% 66%,#FAFF00 66%)"></div><div style="padding:32px"><div style="font-size:28px;font-weight:800">We<span style="color:#02A9EA">Moot</span></div><h1 style="font-size:24px;margin:28px 0 12px">${escapeHtml(copy.heading)}</h1><p style="font-size:16px;line-height:1.6">Hola ${escapeHtml(registration.participant_name)},</p><p style="font-size:16px;line-height:1.6">${escapeHtml(copy.message)}</p>${action}<p style="margin-top:30px;color:#666;font-size:13px">Este mensaje no incluye datos médicos ni respuestas sensibles.</p></div></div></body></html>`;
 
   try {
     const response = await fetch("https://api.resend.com/emails", {

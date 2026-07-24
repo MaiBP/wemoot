@@ -70,7 +70,9 @@ Stripe Checkout caduca a los 30 minutos, que es el mínimo admitido por Stripe. 
 
 Ejecuta `supabase/migrations/007_telegram_complex_flow_phase5.sql` después de la migración 006. Esta migración registra el último `update_id` procesado para que los reintentos de Telegram no dupliquen pasos ni estructuras.
 
-Al detectar un evento complejo, el bot abre un menú para crear programas, generar o introducir semanas, interpretar precios, importar más información y elegir el formulario. Las tarifas interpretadas por OpenAI siempre se presentan para confirmación; sólo después se convierten en reglas deterministas. Las plantillas disponibles son Campus completo, Formulario básico y Formulario personalizado. El resultado se guarda como borrador y se publica desde el dashboard después de revisar su configuración.
+El comando `crear evento` abre un asistente guiado. El club puede describir el evento, enviar varios carteles como imágenes o reutilizar un evento anterior. El bot presenta primero un resumen estructurado, solicita confirmación de las tarifas y pregunta únicamente la configuración que falta: plazas, combinación de modalidades, inscripción directa o preinscripción, límite de solicitudes, plazo de pago y plantilla del formulario. Las invitaciones a participantes se envían exclusivamente por correo. Al finalizar se puede publicar directamente, guardar un borrador o guardar y abrir el dashboard.
+
+Las imágenes admiten un máximo de 10 MB. Las tarifas detectadas nunca se guardan sin una confirmación explícita.
 
 ### Fase 6: privacidad, equipos y comunicaciones
 
@@ -79,6 +81,8 @@ Ejecuta `supabase/migrations/008_privacy_permissions_phase6.sql` después de la 
 Las respuestas médicas se almacenan separadas de los datos generales. Sólo propietarios, administradores y personal médico pueden exportarlas; cada exportación queda auditada. El dashboard permite gestionar el equipo, filtrar inscripciones y descargar CSV generados en el servidor. Los emails de inscripción y pago usan una cola idempotente y nunca incluyen información médica.
 
 Para activar los emails transaccionales configura `RESEND_API_KEY` y `EMAIL_FROM` en Vercel. `EMAIL_FROM` debe utilizar un dominio validado en Resend, por ejemplo `WeMoot <notificaciones@wemoot.com>`. Si no se configuran todavía, la inscripción y el pago continúan funcionando y el envío queda en cola.
+
+La migración `010_multimodal_preregistration.sql` añade selección simultánea de modalidades, preinscripciones por orden de llegada, invitaciones de pago y lista de espera. Las comunicaciones con participantes se envían exclusivamente por correo; Telegram se utiliza únicamente por el club para configurar y gestionar el evento. Configura `CRON_SECRET` con un valor aleatorio de al menos 16 caracteres y programa una llamada autenticada a `GET /api/cron/preregistrations` para procesar vencimientos. En Vercel Pro puede ejecutarse cada hora; en Hobby hace falta un programador externo con mayor frecuencia porque los cron nativos solo admiten una ejecución diaria.
 
 ### Onboarding unificado
 
@@ -107,6 +111,7 @@ La opción tarjeta redirige al Checkout alojado por Stripe, por lo que no se nec
 - `SUPABASE_SECRET_KEY`: clave privada, utilizada únicamente por el webhook de Telegram para sus operaciones administrativas. Nunca debe llevar el prefijo `NEXT_PUBLIC_`.
 - `RESEND_API_KEY`: clave privada para enviar confirmaciones de inscripción y pago.
 - `EMAIL_FROM`: remitente validado, incluyendo opcionalmente el nombre visible.
+- `CRON_SECRET`: secreto para autenticar el procesamiento automático de invitaciones vencidas y la promoción de la lista de espera.
 
 No se necesita `SUPABASE_JWKS_URL` en esta aplicación. El SDK de Supabase
 valida y renueva las sesiones mediante `auth.getUser()`. La URL JWKS solo sería

@@ -27,6 +27,13 @@ export interface TelegramUpdate {
   message?: TelegramMessage;
 }
 
+export interface TelegramAttachment {
+  dataUrl: string;
+  filename: string;
+  mimeType: string;
+  kind: "image";
+}
+
 export async function sendTelegramMessage(
   chatId: string,
   text: string,
@@ -66,7 +73,9 @@ export type TelegramKeyboardButton =
   | string
   | { text: string; request_contact?: boolean; request_location?: boolean };
 
-export async function getTelegramImageDataUrl(message: TelegramMessage) {
+export async function getTelegramAttachment(
+  message: TelegramMessage,
+): Promise<TelegramAttachment | undefined> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) throw new Error("TELEGRAM_BOT_TOKEN no está configurado");
   const photo = message.photo?.at(-1);
@@ -96,9 +105,19 @@ export async function getTelegramImageDataUrl(message: TelegramMessage) {
   if (!fileResponse.ok) {
     throw new Error("No se pudo descargar la imagen de Telegram");
   }
-  const mime = document?.mime_type || "image/jpeg";
+  const mimeType = document?.mime_type || "image/jpeg";
   const bytes = Buffer.from(await fileResponse.arrayBuffer()).toString(
     "base64",
   );
-  return `data:${mime};base64,${bytes}`;
+  return {
+    dataUrl: `data:${mimeType};base64,${bytes}`,
+    filename: document?.file_name ?? "cartel.jpg",
+    mimeType,
+    kind: "image",
+  };
+}
+
+export async function getTelegramImageDataUrl(message: TelegramMessage) {
+  const attachment = await getTelegramAttachment(message);
+  return attachment?.dataUrl;
 }

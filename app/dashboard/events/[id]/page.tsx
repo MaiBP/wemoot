@@ -11,7 +11,9 @@ import { CopyBox } from "@/components/events/copy-box";
 import { RegistrationManager } from "@/components/events/registration-manager";
 import { AdvancedEventManager } from "@/components/events/advanced-event-manager";
 import { PricingRulesManager } from "@/components/events/pricing-rules-manager";
+import { PreregistrationManager } from "@/components/events/preregistration-manager";
 import { resolveEventPermissions, roleLabels } from "@/lib/auth/permissions";
+import { summarizePreregistrations } from "@/lib/preregistration/domain";
 import type {
   EventDiscount,
   EventPriceRule,
@@ -50,7 +52,7 @@ export default async function EventDetailPage({
       ? await supabase
           .from("registrations")
           .select(
-            "*, event_programs(name), registration_periods(event_periods(label)), registration_items(amount, event_programs(name), event_periods(label), event_prices(label))",
+            "*, event_programs(name), registration_programs(amount,event_programs(name)), registration_periods(event_programs(name),event_periods(label)), registration_items(amount, event_programs(name), event_periods(label), event_prices(label))",
           )
           .eq("event_id", id)
           .order("created_at", { ascending: false })
@@ -61,6 +63,7 @@ export default async function EventDetailPage({
           .order("created_at", { ascending: false });
   const registrations = (registrationsResult.data ??
     []) as RegistrationRecord[];
+  const preregistrationStats = summarizePreregistrations(registrations);
   const [{ data: programs = [] }, { data: periods = [] }] = advanced
     ? await Promise.all([
         supabase
@@ -136,6 +139,24 @@ export default async function EventDetailPage({
                   programPeriods={
                     (programPeriods ?? []) as EventProgramPeriod[]
                   }
+                />
+              </CardContent>
+            </Card>
+          )}
+          {advanced && permissions.canManageRegistrations && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Inscripción y lista de espera</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <PreregistrationManager
+                  eventId={event.id}
+                  mode={event.registration_mode ?? "direct"}
+                  allowMultiplePrograms={event.allow_multiple_programs ?? true}
+                  limit={event.preregistration_limit ?? event.capacity}
+                  invitationHours={event.payment_invitation_hours ?? 24}
+                  paymentOpenedAt={event.payment_opened_at ?? null}
+                  stats={preregistrationStats}
                 />
               </CardContent>
             </Card>

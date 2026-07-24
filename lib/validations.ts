@@ -345,8 +345,20 @@ export const registrationFormFieldSchema = z.object({
 export const dynamicRegistrationSchema = z.object({
   event_id: z.uuid(),
   form_id: z.uuid(),
-  program_id: z.uuid(),
-  period_ids: z.array(z.uuid()).min(1).max(52),
+  selections: z
+    .array(
+      z.object({
+        program_id: z.uuid(),
+        period_ids: z.array(z.uuid()).min(1).max(52),
+      }),
+    )
+    .min(1)
+    .max(10)
+    .refine(
+      (items) =>
+        new Set(items.map((item) => item.program_id)).size === items.length,
+      "No puedes repetir una modalidad",
+    ),
   participant_type: z.enum([
     "general",
     "member",
@@ -359,6 +371,18 @@ export const dynamicRegistrationSchema = z.object({
   payment_method: z.enum(["cash", "card"]),
   answers: z.record(z.string(), z.unknown()),
   website: z.string().max(0).optional(),
+});
+
+export const preregistrationSettingsSchema = z.object({
+  registration_mode: z.enum(["direct", "preregistration"]),
+  allow_multiple_programs: z
+    .union([
+      z.boolean(),
+      z.enum(["true", "false"]).transform((value) => value === "true"),
+    ])
+    .default(true),
+  preregistration_limit: z.coerce.number().int().positive().max(100000),
+  payment_invitation_hours: z.coerce.number().int().min(1).max(24),
 });
 
 export const advancedEventBaseSchema = z

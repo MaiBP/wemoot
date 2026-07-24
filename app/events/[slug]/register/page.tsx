@@ -31,11 +31,21 @@ export default async function RegistrationPage({
     .maybeSingle();
   if (!event) notFound();
 
-  const { count } = await admin
+  const preregistration = event.registration_mode === "preregistration";
+  let countQuery = admin
     .from("registrations")
     .select("id", { count: "exact", head: true })
-    .eq("event_id", event.id)
-    .neq("payment_status", "cancelled");
+    .eq("event_id", event.id);
+  countQuery = preregistration
+    ? countQuery.in("registration_status", [
+        "preregistered",
+        "waitlisted",
+        "payment_invited",
+        "pending_payment",
+        "confirmed",
+      ])
+    : countQuery.neq("payment_status", "cancelled");
+  const { count } = await countQuery;
   const advanced = event.event_mode === "advanced";
   const [
     { data: programs = [] },
@@ -124,6 +134,21 @@ export default async function RegistrationPage({
       )
       .reduce((total, reservation) => total + reservation.quantity, 0),
   }));
+  const preregistrationRemaining =
+    event.preregistration_limit == null
+      ? null
+      : Math.max(0, event.preregistration_limit - (count ?? 0));
+  const acceptingRegistrations = preregistration
+    ? preregistrationRemaining == null || preregistrationRemaining > 0
+    : advanced
+      ? liveProgramPeriods.some(
+          (relation) =>
+            relation.is_available &&
+            (relation.capacity == null ||
+              relation.registered_count + relation.reserved_count <
+                relation.capacity),
+        )
+      : remaining > 0;
 
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(2,169,234,.16),transparent_35%),radial-gradient(circle_at_bottom_right,rgba(255,1,251,.10),transparent_35%)] px-4 py-8 sm:py-12">
@@ -135,7 +160,9 @@ export default async function RegistrationPage({
           <div className="h-2 bg-[linear-gradient(90deg,#FF01FB_0_33%,#02A9EA_33%_66%,#FAFF00_66%)]" />
           <CardHeader className="p-6 pb-3 sm:p-8 sm:pb-3">
             <p className="mb-2 text-sm font-bold uppercase tracking-wider text-brand-cyan">
-              Inscripción abierta
+              {preregistration
+                ? "Preinscripciones abiertas"
+                : "Inscripción abierta"}
             </p>
             <CardTitle className="text-2xl sm:text-3xl">
               {event.title}
@@ -175,7 +202,11 @@ export default async function RegistrationPage({
                 <Users className="mt-0.5 size-5 shrink-0 text-brand-cyan" />
                 <span>
                   <strong className="block">
-                    {remaining} plazas disponibles
+                    {preregistration
+                      ? preregistrationRemaining == null
+                        ? "Preinscripciones disponibles"
+                        : `${preregistrationRemaining} preinscripciones disponibles`
+                      : `${remaining} plazas disponibles`}
                   </strong>
                   <span className="text-sm text-brand-black/55">
                     {event.age_range || "Todas las edades"}
@@ -195,13 +226,23 @@ export default async function RegistrationPage({
                 </span>
               </p>
             </div>
+            {preregistration && (
+              <div className="mb-6 rounded-xl bg-brand-yellow/25 p-5 text-sm leading-6">
+                <strong>El pago todavía no está habilitado.</strong>
+                <p>
+                  Completa el formulario para reservar tu posición por orden de
+                  llegada. Te avisaremos cuando puedas realizar el pago. La
+                  preinscripción no garantiza una plaza.
+                </p>
+              </div>
+            )}
             {payment === "cancelled" && (
               <p className="mb-5 rounded-xl bg-brand-yellow/35 p-4 text-sm">
                 El pago con tarjeta se canceló. Tu plaza no se confirmó; puedes
                 intentarlo de nuevo o elegir efectivo.
               </p>
             )}
-            {remaining > 0 ? (
+            {acceptingRegistrations ? (
               registrationForm ? (
                 <DynamicRegistrationForm
                   eventId={event.id}
@@ -212,6 +253,17 @@ export default async function RegistrationPage({
                   periods={periods ?? []}
                   relations={liveProgramPeriods as EventProgramPeriod[]}
                   includedItems={(includedItems ?? []) as EventIncludedItem[]}
+                  registrationMode={
+                    preregistration ? "preregistration" : "direct"
+                  }
+                  allowMultiplePrograms={event.allow_multiple_programs ?? true}
+                  allowIndividualPeriods={
+                    (
+                      event.general_settings as
+                        | { allow_individual_periods?: boolean }
+                        | null
+                    )?.allow_individual_periods !== false
+                  }
                 />
               ) : (
                 <PublicRegistrationForm
@@ -224,9 +276,15 @@ export default async function RegistrationPage({
               )
             ) : (
               <div className="rounded-xl bg-brand-yellow/35 p-5 text-center">
-                <strong>El evento está completo</strong>
+                <strong>
+                  {preregistration
+                    ? "Se alcanzó el límite de preinscripciones"
+                    : "El evento está completo"}
+                </strong>
                 <p className="mt-1 text-sm text-brand-black/60">
-                  Ya no quedan plazas disponibles.
+                  {preregistration
+                    ? "No se admiten nuevas solicitudes en este momento."
+                    : "Ya no quedan plazas disponibles."}
                 </p>
               </div>
             )}

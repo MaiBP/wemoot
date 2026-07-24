@@ -12,7 +12,7 @@ import {
   eventSchema,
 } from "@/lib/validations";
 import {
-  getTelegramImageDataUrl,
+  getTelegramAttachment,
   sendTelegramMessage,
   type TelegramUpdate,
 } from "@/lib/telegram";
@@ -20,6 +20,9 @@ import type { AdvancedEventDraft } from "@/types/event";
 import {
   complexMenuKeyboard,
   complexSummary,
+  detectedEventKeyboard,
+  detectedEventSummary,
+  eventCreationMethodKeyboard,
   getAdvancedDraft,
   handleComplexFlowStep,
   isComplexFlowName,
@@ -42,6 +45,10 @@ import {
   telegramOnboardingSummary,
   telegramProfileTypeKeyboard,
 } from "@/lib/onboarding/telegram-onboarding";
+import {
+  openEventPayments,
+  processPreregistrationQueues,
+} from "@/lib/preregistration/queue";
 const fieldNames: Record<string, string> = {
   title: "nombre",
   event_type: "tipo",
@@ -54,7 +61,7 @@ const fieldNames: Record<string, string> = {
   schedule: "horario",
 };
 const yes =
-  /^(sí|si|yes|publica|publícalo|publicar|confirmar|confirmar borrador|guardar borrador)$/i;
+  /^(sí|si|yes|publica|publícalo|publicar|confirmar|confirmar publicación|confirmar borrador|guardar borrador)$/i;
 
 async function updateTelegramOnboardingState(
   admin: ReturnType<typeof createAdminClient>,
@@ -559,7 +566,7 @@ export async function POST(request: Request) {
     .slice(0, 4000);
   const admin = createAdminClient();
   try {
-    const imageDataUrl = await getTelegramImageDataUrl(message);
+    const attachment = await getTelegramAttachment(message);
     const { data: account } = await admin
       .from("telegram_accounts")
       .select("*, profiles(*)")
@@ -666,10 +673,23 @@ export async function POST(request: Request) {
       });
       return NextResponse.json({ ok: true });
     }
-    if (/^crear mi primer evento$/i.test(text)) {
+    if (/^(crear( mi primer)? evento|crear campus)$/i.test(text)) {
+      const collected = {
+        ...buildEventDefaults(onboardingStatus),
+        event_mode: "advanced",
+        guided_creation: true,
+        advanced: { programs: [], periods: [], prices: [], uncertainties: [] },
+      };
+      await updateTelegramOnboardingState(
+        admin,
+        chatId,
+        "event_creation_method",
+        collected,
+      );
       await sendTelegramMessage(
         chatId,
-        "Cuéntame qué quieres organizar. Por ejemplo: “Quiero crear un campus del 15 al 19 de julio”.",
+        "Vamos a crear tu evento. Puedes darme la información de tres formas:",
+        eventCreationMethodKeyboard,
       );
       return NextResponse.json({ ok: true });
     }
@@ -690,7 +710,108 @@ export async function POST(request: Request) {
     if (text === "/start" || text.toLowerCase() === "ayuda") {
       await sendTelegramMessage(
         chatId,
-        "Puedo crear eventos simples y campus con varias modalidades, semanas y precios.\n\nEjemplos:\n“Quiero crear un torneo el 15 de julio en Barcelona, 75 €, 40 plazas.”\n“Quiero crear un campus de tecnificación con actividades de mañana y tarde.”\n\nComandos: crear evento · mis eventos · ayuda",
+        "Puedo crear eventos simples y campus con varias modalidades, semanas y precios.\n\nEjemplos:\n“Quiero crear un torneo el 15 de julio en Barcelona, 75 €, 40 plazas.”\n“Quiero crear un campus de tecnificación con actividades de mañana y tarde.”\n\nComandos: crear evento · mis eventos · preinscripciones · abrir pagos [evento] · procesar lista · ayuda",
+      );
+      return NextResponse.json({ ok: true });
+    }
+    if (text.toLowerCase() === "preinscripciones") {
+      const { data: events } = await admin
+        .from("events")
+        .select("id,title,payment_opened_at")
+        .eq("owner_id", profileId)
+        .eq("registration_mode", "preregistration")
+        .order("start_date");
+      if (!events?.length) {
+        await sendTelegramMessage(
+          chatId,
+          "No tienes eventos configurados con preinscripción.",
+        );
+        return NextResponse.json({ ok: true });
+      }
+      const summaries = await Promise.all(
+        events.map(async (event) => {
+          const { data: rows } = await admin
+            .from("registrations")
+            .select("registration_status")
+            .eq("event_id", event.id)
+            .not("queue_position", "is", null);
+          const waiting = (rows ?? []).filter((row) =>
+            ["preregistered", "waitlisted"].includes(row.registration_status),
+          ).length;
+          const invited = (rows ?? []).filter((row) =>
+            ["payment_invited", "pending_payment"].includes(
+              row.registration_status,
+            ),
+          ).length;
+          const confirmed = (rows ?? []).filter(
+            (row) => row.registration_status === "confirmed",
+          ).length;
+          return `• ${event.title}\n  ${waiting} en espera · ${invited} invitados · ${confirmed} confirmados${event.payment_opened_at ? " · pagos abiertos" : ""}`;
+        }),
+      );
+      await sendTelegramMessage(
+        chatId,
+        `${summaries.join("\n\n")}\n\nPara comenzar: abrir pagos Nombre del evento`,
+      );
+      return NextResponse.json({ ok: true });
+    }
+    const openPaymentsMatch = text.match(/^abrir pagos(?:\s+(.+))?$/i);
+    if (openPaymentsMatch) {
+      const requested = openPaymentsMatch[1]?.trim();
+      if (!requested) {
+        const { data: events } = await admin
+          .from("events")
+          .select("title")
+          .eq("owner_id", profileId)
+          .eq("registration_mode", "preregistration")
+          .is("payment_opened_at", null)
+          .limit(10);
+        await sendTelegramMessage(
+          chatId,
+          events?.length
+            ? `Indica el evento:\n${events.map((event) => `• abrir pagos ${event.title}`).join("\n")}`
+            : "No tienes eventos pendientes de abrir pagos.",
+        );
+        return NextResponse.json({ ok: true });
+      }
+      const { data: events } = await admin
+        .from("events")
+        .select("id,title")
+        .eq("owner_id", profileId)
+        .eq("registration_mode", "preregistration")
+        .ilike("title", requested)
+        .limit(2);
+      if (events?.length !== 1) {
+        await sendTelegramMessage(
+          chatId,
+          "No encontré un único evento con ese nombre. Escribe “preinscripciones” para ver la lista.",
+        );
+        return NextResponse.json({ ok: true });
+      }
+      const result = await openEventPayments(admin, events[0].id);
+      await sendTelegramMessage(
+        chatId,
+        `✅ Pagos abiertos para ${events[0].title}.\n\n${result.invited} invitaciones enviadas · ${result.waiting} personas en espera.`,
+      );
+      return NextResponse.json({ ok: true });
+    }
+    if (text.toLowerCase() === "procesar lista") {
+      const { data: events } = await admin
+        .from("events")
+        .select("id")
+        .eq("owner_id", profileId)
+        .eq("registration_mode", "preregistration")
+        .not("payment_opened_at", "is", null);
+      let invited = 0;
+      let expired = 0;
+      for (const event of events ?? []) {
+        const result = await processPreregistrationQueues(admin, event.id);
+        invited += result.invited;
+        expired += result.expired;
+      }
+      await sendTelegramMessage(
+        chatId,
+        `Lista procesada: ${expired} plazos vencidos y ${invited} nuevas invitaciones.`,
       );
       return NextResponse.json({ ok: true });
     }
@@ -726,7 +847,258 @@ export async function POST(request: Request) {
     }
     if (isComplexFlowName(state?.current_flow)) {
       const existing = state.collected_data as Record<string, unknown>;
+      if (
+        state.current_flow === "event_creation_images" &&
+        attachment
+      ) {
+        await sendTelegramMessage(
+          chatId,
+          "🖼️ Estoy analizando la imagen…",
+        );
+        const imported = await parseEventMessage(
+          message.caption ?? "Incorpora la información de este archivo",
+          existing,
+          attachment,
+        );
+        const importedData: Record<string, unknown> = {
+          ...existing,
+          ...Object.fromEntries(
+            Object.entries(imported.event).filter(
+              ([, value]) => value !== null && value !== undefined,
+            ),
+          ),
+          social_copy: imported.social_copy || existing.social_copy,
+          whatsapp_message:
+            imported.whatsapp_message || existing.whatsapp_message,
+          event_mode: "advanced",
+          advanced: imported.advanced ?? existing.advanced,
+          telegram_attachment_count:
+            Number(existing.telegram_attachment_count ?? 0) + 1,
+        };
+        await admin
+          .from("conversation_states")
+          .update({
+            current_flow: "event_creation_images",
+            collected_data: importedData,
+            missing_fields: imported.missing_fields,
+            last_message: text,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("telegram_chat_id", chatId);
+        await sendTelegramMessage(
+          chatId,
+          `✅ Archivo incorporado. Ya llevo ${String(importedData.telegram_attachment_count)}. Puedes enviar otro o pulsar “Analizar información”.`,
+          [["🔎 Analizar información"], ["Cancelar"]],
+        );
+        return NextResponse.json({ ok: true });
+      }
       const result = handleComplexFlowStep(state.current_flow, text, existing);
+      if (result.action === "list_previous_events") {
+        const { data: events } = await admin
+          .from("events")
+          .select("id,title,start_date")
+          .eq("owner_id", profileId)
+          .order("created_at", { ascending: false })
+          .limit(8);
+        if (!events?.length) {
+          await updateTelegramOnboardingState(
+            admin,
+            chatId,
+            "event_creation_method",
+            existing,
+          );
+          await sendTelegramMessage(
+            chatId,
+            "Todavía no tienes eventos para copiar. Elige otra forma de crear el evento.",
+            eventCreationMethodKeyboard,
+          );
+          return NextResponse.json({ ok: true });
+        }
+        const candidates = events.map((event, index) => ({
+          id: event.id,
+          button: `${index + 1}. ${event.title}`.slice(0, 60),
+        }));
+        await updateTelegramOnboardingState(
+          admin,
+          chatId,
+          "event_creation_copy",
+          { ...existing, telegram_copy_candidates: candidates },
+        );
+        await sendTelegramMessage(
+          chatId,
+          "¿Qué evento quieres usar como base?",
+          [
+            ...candidates.map((candidate) => [candidate.button]),
+            ["Cancelar"],
+          ],
+        );
+        return NextResponse.json({ ok: true });
+      }
+      if (result.action === "copy_event") {
+        const candidates = Array.isArray(existing.telegram_copy_candidates)
+          ? (existing.telegram_copy_candidates as Array<{
+              id: string;
+              button: string;
+            }>)
+          : [];
+        const selected = candidates.find(
+          (candidate) => candidate.button === text.trim(),
+        );
+        if (!selected) {
+          await sendTelegramMessage(
+            chatId,
+            "Selecciona uno de los eventos de la lista.",
+            [
+              ...candidates.map((candidate) => [candidate.button]),
+              ["Cancelar"],
+            ],
+          );
+          return NextResponse.json({ ok: true });
+        }
+        const [
+          { data: sourceEvent },
+          { data: programs },
+          { data: periods },
+          { data: rules },
+          { data: discounts },
+        ] = await Promise.all([
+          admin
+            .from("events")
+            .select("*")
+            .eq("id", selected.id)
+            .eq("owner_id", profileId)
+            .single(),
+          admin
+            .from("event_programs")
+            .select("*")
+            .eq("event_id", selected.id)
+            .order("position"),
+          admin
+            .from("event_periods")
+            .select("*")
+            .eq("event_id", selected.id)
+            .order("position"),
+          admin
+            .from("event_price_rules")
+            .select("*")
+            .eq("event_id", selected.id)
+            .eq("is_active", true)
+            .order("priority", { ascending: false }),
+          admin
+            .from("event_discounts")
+            .select("*")
+            .eq("event_id", selected.id)
+            .eq("is_active", true)
+            .order("priority", { ascending: false }),
+        ]);
+        if (!sourceEvent) throw new Error("No se pudo copiar el evento");
+        const programNames = new Map(
+          (programs ?? []).map((program) => [program.id, program.name]),
+        );
+        const periodLabels = new Map(
+          (periods ?? []).map((period) => [period.id, period.label]),
+        );
+        const sourceSettings = (sourceEvent.general_settings ?? {}) as {
+          allow_individual_periods?: boolean;
+          full_event_discount_percentage?: number | null;
+        };
+        const copiedFullEventDiscount =
+          sourceSettings.full_event_discount_percentage ??
+          (discounts ?? []).find(
+            (discount) =>
+              discount.code == null &&
+              discount.discount_type === "percentage" &&
+              discount.applies_to === "event" &&
+              Number(discount.min_periods ?? 0) >= (periods ?? []).length,
+          )?.discount_value;
+        const copied: Record<string, unknown> = {
+          ...buildEventDefaults(onboardingStatus),
+          title: `${sourceEvent.title} (copia)`,
+          event_type: sourceEvent.event_type,
+          description: sourceEvent.description,
+          city: sourceEvent.city,
+          location: sourceEvent.location,
+          start_date: sourceEvent.start_date,
+          end_date: sourceEvent.end_date,
+          schedule: sourceEvent.schedule,
+          age_range: sourceEvent.age_range,
+          organizer_name: sourceEvent.organizer_name,
+          contact_email: sourceEvent.contact_email,
+          contact_phone: sourceEvent.contact_phone,
+          event_mode: "advanced",
+          guided_creation: true,
+          allow_multiple_programs:
+            sourceEvent.allow_multiple_programs !== false,
+          registration_mode: sourceEvent.registration_mode ?? "direct",
+          preregistration_limit: sourceEvent.preregistration_limit,
+          payment_invitation_hours:
+            sourceEvent.payment_invitation_hours ?? 24,
+          allow_individual_periods:
+            sourceSettings.allow_individual_periods !== false,
+          full_event_discount_percentage:
+            copiedFullEventDiscount == null
+              ? undefined
+              : Number(copiedFullEventDiscount),
+          advanced: {
+            programs: (programs ?? []).map((program) => ({
+              name: program.name,
+              turn: program.turn,
+              description: program.description,
+              start_time: program.start_time,
+              end_time: program.end_time,
+              min_age: program.min_age,
+              max_age: program.max_age,
+              capacity: program.capacity,
+              payment_timing: program.payment_timing,
+              payment_due_date: program.payment_due_date,
+              included_items: program.included_items ?? [],
+            })),
+            periods: (periods ?? []).map((period) => ({
+              label: period.label,
+              start_date: period.start_date,
+              end_date: period.end_date,
+            })),
+            prices: (rules ?? []).flatMap((rule) => {
+              const programName = programNames.get(rule.program_id);
+              if (!programName) return [];
+              return [
+                {
+                  program_name: programName,
+                  period_label: rule.period_id
+                    ? (periodLabels.get(rule.period_id) ?? null)
+                    : null,
+                  label: rule.label ?? "Tarifa",
+                  audience:
+                    rule.participant_type === "member"
+                      ? "member"
+                      : rule.participant_type === "non_member"
+                        ? "non_member"
+                        : "all",
+                  amount: Number(rule.amount),
+                  pricing_type: rule.pricing_type,
+                  quantity_from: rule.quantity_from,
+                  quantity_to: rule.quantity_to,
+                },
+              ];
+            }),
+            uncertainties: [
+              "Revisa las fechas y los precios antes de publicar la copia.",
+            ],
+          },
+        };
+        await updateTelegramOnboardingState(
+          admin,
+          chatId,
+          "event_creation_detected_confirmation",
+          copied,
+        );
+        await sendTelegramMessage(
+          chatId,
+          `${detectedEventSummary(copied)}\n\nHe marcado fechas y precios para revisión.`,
+          detectedEventKeyboard,
+        );
+        return NextResponse.json({ ok: true });
+      }
       if (result.action === "parse_pricing") {
         const programNames = getAdvancedDraft(existing).programs.map(
           (program) => program.name,
@@ -769,7 +1141,9 @@ export async function POST(request: Request) {
           await sendTelegramMessage(
             chatId,
             `He interpretado estas tarifas:\n\n${pricingPreview(interpreted.prices).slice(0, 3500)}${interpreted.uncertainties.length ? `\n\n⚠️ Revisa:\n${interpreted.uncertainties.join("\n").slice(0, 350)}` : ""}`,
-            [["Confirmar precios", "Editar precios"], ["Menú"]],
+            existing.guided_creation
+              ? [["✅ Correcto", "✏️ Editar precios"], ["Cancelar"]]
+              : [["Confirmar precios", "Editar precios"], ["Menú"]],
           );
         } catch {
           await sendTelegramMessage(
@@ -779,8 +1153,11 @@ export async function POST(request: Request) {
         }
         return NextResponse.json({ ok: true });
       }
-      if (result.action === "import") {
-        const imported = await parseEventMessage(text, existing, imageDataUrl);
+      if (
+        result.action === "import" ||
+        result.action === "import_guided"
+      ) {
+        const imported = await parseEventMessage(text, existing, attachment);
         const importedData: Record<string, unknown> = {
           ...existing,
           ...Object.fromEntries(
@@ -794,9 +1171,12 @@ export async function POST(request: Request) {
           event_mode: "advanced",
           advanced: imported.advanced ?? existing.advanced,
         };
-        const nextFlow = imported.missing_fields.length
-          ? "creating_event"
-          : "complex_menu";
+        const guided = result.action === "import_guided";
+        const nextFlow = guided
+          ? "event_creation_detected_confirmation"
+          : imported.missing_fields.length
+            ? "creating_event"
+            : "complex_menu";
         await admin
           .from("conversation_states")
           .update({
@@ -809,10 +1189,16 @@ export async function POST(request: Request) {
           .eq("telegram_chat_id", chatId);
         await sendTelegramMessage(
           chatId,
-          imported.missing_fields.length
-            ? `He incorporado la información. Aún faltan:\n${imported.missing_fields.map((field) => `• ${fieldNames[field] ?? field}`).join("\n")}`
-            : `${imageDataUrl ? "Cartel analizado. " : "Información incorporada. "}${complexSummary(importedData)}\n\n¿Qué quieres configurar?`,
-          imported.missing_fields.length ? undefined : complexMenuKeyboard,
+          guided
+            ? detectedEventSummary(importedData)
+            : imported.missing_fields.length
+              ? `He incorporado la información. Aún faltan:\n${imported.missing_fields.map((field) => `• ${fieldNames[field] ?? field}`).join("\n")}`
+              : `${attachment ? "Cartel analizado. " : "Información incorporada. "}${complexSummary(importedData)}\n\n¿Qué quieres configurar?`,
+          guided
+            ? detectedEventKeyboard
+            : imported.missing_fields.length
+              ? undefined
+              : complexMenuKeyboard,
         );
         return NextResponse.json({ ok: true });
       }
@@ -861,7 +1247,9 @@ export async function POST(request: Request) {
         (total, program) => total + (program.capacity ?? 0),
         0,
       );
-      const saveOnly = /^guardar borrador$/i.test(text);
+      const saveOnly =
+        collectedData.telegram_save_mode === "draft" ||
+        /^(guardar borrador|confirmar borrador)$/i.test(text);
       const { data: organization } = await admin
         .from("organizations")
         .select("id")
@@ -879,12 +1267,39 @@ export async function POST(request: Request) {
           capacity: isAdvanced
             ? Math.max(totalCapacity, 1)
             : (parsed.data as { capacity: number }).capacity,
-          ...(isAdvanced ? { event_mode: "advanced" } : {}),
+          ...(isAdvanced
+            ? {
+                event_mode: "advanced",
+                allow_multiple_programs:
+                  collectedData.allow_multiple_programs !== false,
+                registration_mode:
+                  collectedData.registration_mode === "preregistration"
+                    ? "preregistration"
+                    : "direct",
+                preregistration_limit:
+                  collectedData.registration_mode === "preregistration"
+                    ? Number(
+                        collectedData.preregistration_limit ??
+                          Math.max(totalCapacity, 1),
+                      )
+                    : null,
+                payment_invitation_hours:
+                  collectedData.registration_mode === "preregistration"
+                    ? Number(collectedData.payment_invitation_hours ?? 24)
+                    : 24,
+                general_settings: {
+                  allow_individual_periods:
+                    collectedData.allow_individual_periods !== false,
+                  full_event_discount_percentage:
+                    collectedData.full_event_discount_percentage ?? null,
+                },
+              }
+            : {}),
           owner_id: profileId,
           organization_id: organization?.id ?? null,
           slug: createSlug(parsed.data.title),
           payment_mode: "manual",
-          status: isAdvanced || saveOnly ? "draft" : "published",
+          status: saveOnly ? "draft" : "published",
           social_copy: String(copy.social_copy ?? ""),
           whatsapp_message: String(copy.whatsapp_message ?? ""),
           created_from: "telegram",
@@ -895,6 +1310,27 @@ export async function POST(request: Request) {
       if (isAdvanced) {
         try {
           await saveAdvancedStructure(admin, event.id, advancedDraft);
+          const fullEventDiscount = Number(
+            collectedData.full_event_discount_percentage ?? 0,
+          );
+          if (fullEventDiscount > 0) {
+            const { error: discountError } = await admin
+              .from("event_discounts")
+              .insert({
+                event_id: event.id,
+                name: "Campus completo",
+                description:
+                  "Descuento automático al seleccionar todos los periodos.",
+                discount_type: "percentage",
+                discount_value: fullEventDiscount,
+                applies_to: "event",
+                min_periods: Math.max(advancedDraft.periods.length, 1),
+                priority: 100,
+                is_combinable: false,
+                is_active: true,
+              });
+            if (discountError) throw discountError;
+          }
           const template = collectedData.registration_template;
           if (
             template === "football_campus_full" ||
@@ -918,8 +1354,8 @@ export async function POST(request: Request) {
         .eq("telegram_chat_id", chatId);
       await sendTelegramMessage(
         chatId,
-        isAdvanced || saveOnly
-          ? `✅ Borrador guardado.\n\nHe creado ${advancedDraft.programs.length} modalidades, ${advancedDraft.periods.length} periodos y ${advancedDraft.prices.length} tarifas. Revísalo antes de publicar:\n${process.env.NEXT_PUBLIC_APP_URL}/dashboard/events/${event.id}`
+        saveOnly
+          ? `✅ Borrador guardado.\n\n${complexSummary(collectedData)}\n\nRevísalo antes de publicar:\n${process.env.NEXT_PUBLIC_APP_URL}/dashboard/events/${event.id}`
           : `✅ Evento publicado.\n\nGestionar evento:\n${process.env.NEXT_PUBLIC_APP_URL}/dashboard/events/${event.id}\n\nEnlace de inscripción para participantes:\n${process.env.NEXT_PUBLIC_APP_URL}/events/${event.slug}/register`,
       );
       return NextResponse.json({ ok: true });
@@ -932,7 +1368,7 @@ export async function POST(request: Request) {
             ...(state.collected_data as Record<string, unknown>),
           }
         : buildEventDefaults(onboardingStatus);
-    const parsed = await parseEventMessage(text, existing, imageDataUrl);
+    const parsed = await parseEventMessage(text, existing, attachment);
     if (parsed.intent === "unknown") {
       await sendTelegramMessage(
         chatId,
@@ -951,6 +1387,10 @@ export async function POST(request: Request) {
       whatsapp_message: parsed.whatsapp_message || existing.whatsapp_message,
       event_mode: parsed.event_mode ?? existing.event_mode ?? "simple",
       advanced: parsed.advanced ?? existing.advanced,
+      allow_multiple_programs:
+        existing.allow_multiple_programs === false ? false : true,
+      registration_mode: existing.registration_mode ?? "direct",
+      payment_invitation_hours: existing.payment_invitation_hours ?? 24,
     };
     if (parsed.missing_fields.length) {
       await admin
@@ -965,7 +1405,7 @@ export async function POST(request: Request) {
         .eq("telegram_chat_id", chatId);
       await sendTelegramMessage(
         chatId,
-        `${imageDataUrl ? "He analizado el cartel. " : "Perfecto. "}Me faltan ${parsed.missing_fields.length} datos:\n${parsed.missing_fields.map((f) => `• ${fieldNames[f] ?? f}`).join("\n")}\n\nPuedes responder en un solo mensaje${parsed.event_mode === "advanced" ? " o enviar más carteles." : "."}`,
+        `${attachment ? "He analizado el archivo. " : "Perfecto. "}Me faltan ${parsed.missing_fields.length} datos:\n${parsed.missing_fields.map((f) => `• ${fieldNames[f] ?? f}`).join("\n")}\n\nPuedes responder en un solo mensaje${parsed.event_mode === "advanced" ? " o enviar más carteles." : "."}`,
       );
       return NextResponse.json({ ok: true });
     }

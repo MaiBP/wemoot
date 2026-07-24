@@ -39,33 +39,42 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     const input = parsed.data;
-    const [{ data: event }, { data: form }, { data: program }] =
-      await Promise.all([
-        admin
-          .from("events")
-          .select("*")
-          .eq("id", input.event_id)
-          .eq("status", "published")
-          .maybeSingle(),
-        admin
-          .from("registration_forms")
-          .select("*")
-          .eq("id", input.form_id)
-          .eq("event_id", input.event_id)
-          .eq("status", "published")
-          .maybeSingle(),
-        admin
-          .from("event_programs")
-          .select("*")
-          .eq("id", input.program_id)
-          .eq("event_id", input.event_id)
-          .eq("active", true)
-          .maybeSingle(),
-      ]);
-    if (!event || !form || !program)
+    const [{ data: event }, { data: form }] = await Promise.all([
+      admin
+        .from("events")
+        .select("*")
+        .eq("id", input.event_id)
+        .eq("status", "published")
+        .maybeSingle(),
+      admin
+        .from("registration_forms")
+        .select("*")
+        .eq("id", input.form_id)
+        .eq("event_id", input.event_id)
+        .eq("status", "published")
+        .maybeSingle(),
+    ]);
+    const programIds = input.selections.map(
+      (selection) => selection.program_id,
+    );
+    const { data: programs, error: programsError } = await admin
+      .from("event_programs")
+      .select("*")
+      .eq("event_id", input.event_id)
+      .eq("active", true)
+      .in("id", programIds);
+    if (programsError) throw programsError;
+    if (!event || !form || !programs || programs.length !== programIds.length)
       return NextResponse.json(
-        { error: "El evento, formulario o programa ya no está disponible" },
+        {
+          error: "El evento, formulario o una modalidad ya no está disponible",
+        },
         { status: 409 },
+      );
+    if (event.allow_multiple_programs === false && input.selections.length > 1)
+      return NextResponse.json(
+        { error: "Este evento solo permite elegir una modalidad." },
+        { status: 400 },
       );
     const { data: fields, error: fieldsError } = await admin
       .from("registration_form_fields")
@@ -103,55 +112,101 @@ export async function POST(request: Request) {
         );
     }
     const birthDateValue = text(answers.participant_birth_date);
-    const participantValidation = validateParticipant({
-      birthDate: birthDateValue,
-      eventDate: event.start_date,
-      guardianName: text(answers.guardian_name),
-      minAge: program.min_age,
-      maxAge: program.max_age,
-    });
-    if (
-      participantValidation.age == null ||
-      participantValidation.errors.length
-    )
-      return NextResponse.json(
-        { error: participantValidation.errors[0] },
-        { status: 400 },
-      );
-    const age = participantValidation.age;
+    let age: number | null = null;
     const birthYear = Number(birthDateValue.slice(0, 4));
-    if (
-      (program.min_birth_year != null && birthYear < program.min_birth_year) ||
-      (program.max_birth_year != null && birthYear > program.max_birth_year)
-    )
+    for (const program of programs) {
+      const participantValidation = validateParticipant({
+        birthDate: birthDateValue,
+        eventDate: event.start_date,
+        guardianName: text(answers.guardian_name),
+        minAge: program.min_age,
+        maxAge: program.max_age,
+      });
+      if (
+        participantValidation.age == null ||
+        participantValidation.errors.length
+      )
+        return NextResponse.json(
+          {
+            error: `${program.name}: ${participantValidation.errors[0]}`,
+          },
+          { status: 400 },
+        );
+      age = participantValidation.age;
+      if (
+        (program.min_birth_year != null &&
+          birthYear < program.min_birth_year) ||
+        (program.max_birth_year != null && birthYear > program.max_birth_year)
+      )
+        return NextResponse.json(
+          {
+            error: `El año de nacimiento no corresponde a ${program.name}`,
+          },
+          { status: 400 },
+        );
+    }
+    if (age == null)
       return NextResponse.json(
-        { error: "El año de nacimiento no corresponde a la modalidad" },
+        { error: "No se pudo validar la edad del participante" },
         { status: 400 },
       );
 
-    for (const periodId of input.period_ids) {
-      const { data: relation } = await admin
+    for (const selection of input.selections) {
+      const { data: relations, error: relationsError } = await admin
         .from("event_program_periods")
-        .select("capacity,is_available")
-        .eq("program_id", program.id)
-        .eq("period_id", periodId)
-        .maybeSingle();
-      if (!relation?.is_available)
+        .select("period_id,is_available")
+        .eq("program_id", selection.program_id)
+        .in("period_id", selection.period_ids);
+      if (relationsError) throw relationsError;
+      if (
+        relations?.length !== selection.period_ids.length ||
+        relations.some((relation) => !relation.is_available)
+      )
         return NextResponse.json(
-          { error: "Una semana seleccionada ya no está disponible" },
+          { error: "Un periodo seleccionado ya no está disponible" },
           { status: 409 },
         );
     }
-    const calculation = await calculateRegistrationPrice(
-      {
-        eventId: event.id,
-        programId: program.id,
-        periodIds: input.period_ids,
-        participantType: input.participant_type,
-        discountCode: input.discount_code ?? undefined,
-      },
-      admin,
+    const calculatedItems = await Promise.all(
+      input.selections.map(async (selection) => ({
+        selection,
+        calculation: await calculateRegistrationPrice(
+          {
+            eventId: event.id,
+            programId: selection.program_id,
+            periodIds: selection.period_ids,
+            participantType: input.participant_type,
+            discountCode: input.discount_code ?? undefined,
+          },
+          admin,
+        ),
+      })),
     );
+    const currencies = new Set(
+      calculatedItems.map((item) => item.calculation.currency),
+    );
+    if (currencies.size !== 1)
+      return NextResponse.json(
+        { error: "Las modalidades deben utilizar la misma moneda" },
+        { status: 400 },
+      );
+    const calculation = {
+      baseAmount: calculatedItems.reduce(
+        (sum, item) => sum + item.calculation.baseAmount,
+        0,
+      ),
+      finalAmount: calculatedItems.reduce(
+        (sum, item) => sum + item.calculation.finalAmount,
+        0,
+      ),
+      discounts: calculatedItems.flatMap((item) => item.calculation.discounts),
+      currency: calculatedItems[0].calculation.currency,
+      items: calculatedItems.map((item) => ({
+        programId: item.selection.program_id,
+        periodIds: item.selection.period_ids,
+        calculation: item.calculation,
+      })),
+    };
     const participantName = [
       text(answers.participant_name),
       text(answers.first_surname),
@@ -173,14 +228,18 @@ export async function POST(request: Request) {
         { error: "Este participante ya está inscrito" },
         { status: 409 },
       );
+    const preregistration = event.registration_mode === "preregistration";
+    const immediatePayment = programs.every(
+      (program) => program.payment_timing === "immediate",
+    );
     const requiresPayment =
-      program.payment_timing === "immediate" && calculation.finalAmount > 0;
+      !preregistration && immediatePayment && calculation.finalAmount > 0;
     const { data: registration, error: registrationError } = await admin
       .from("registrations")
       .insert({
         event_id: event.id,
         form_id: form.id,
-        program_id: program.id,
+        program_id: input.selections[0].program_id,
         participant_type: input.participant_type,
         participant_name: participantName,
         participant_email: email,
@@ -198,15 +257,19 @@ export async function POST(request: Request) {
         currency: calculation.currency,
         source: "web",
         submitted_at: new Date().toISOString(),
-        registration_status:
-          requiresPayment && input.payment_method === "card"
+        registration_status: preregistration
+          ? "preregistered"
+          : requiresPayment && input.payment_method === "card"
             ? "pending_payment"
-            : program.payment_timing === "immediate"
+            : immediatePayment
               ? "confirmed"
               : "requested",
-        payment_status: calculation.finalAmount === 0 ? "paid" : "pending",
+        payment_status:
+          !preregistration && calculation.finalAmount === 0
+            ? "paid"
+            : "pending",
       })
-      .select("id")
+      .select("id,public_token,queue_position")
       .single();
     if (registrationError) throw registrationError;
     createdId = registration.id;
@@ -215,8 +278,43 @@ export async function POST(request: Request) {
       answers,
       fields ?? [],
     );
-    const perPeriod =
-      Math.round(calculation.finalAmount / input.period_ids.length) / 100;
+    const registrationPeriods = calculatedItems.flatMap((item) => {
+      const perPeriod =
+        Math.round(
+          item.calculation.finalAmount / item.selection.period_ids.length,
+        ) / 100;
+      return item.selection.period_ids.map((period_id) => ({
+        registration_id: registration.id,
+        period_id,
+        program_id: item.selection.program_id,
+        price: perPeriod,
+      }));
+    });
+    const registrationPrograms = calculatedItems.map((item) => ({
+      registration_id: registration.id,
+      event_id: event.id,
+      program_id: item.selection.program_id,
+      amount: item.calculation.finalAmount / 100,
+      currency: item.calculation.currency,
+    }));
+    const discountUses = Array.from(
+      calculation.discounts
+        .reduce(
+          (
+            uses: Map<string, { discount_id: string; amount: number }>,
+            discount,
+          ) => {
+            const current = uses.get(discount.id);
+            uses.set(discount.id, {
+              discount_id: discount.id,
+              amount: (current?.amount ?? 0) + discount.amount,
+            });
+            return uses;
+          },
+          new Map(),
+        )
+        .values(),
+    );
     const consentRows = (fields ?? []).flatMap((field) => {
       const rules = field.validation_rules as {
         consent?: boolean;
@@ -254,14 +352,8 @@ export async function POST(request: Request) {
         allergies: text(answers.allergies) || null,
         medical_notes: text(answers.medical_notes) || null,
       }),
-      admin.from("registration_periods").insert(
-        input.period_ids.map((period_id) => ({
-          registration_id: registration.id,
-          period_id,
-          program_id: program.id,
-          price: perPeriod,
-        })),
-      ),
+      admin.from("registration_periods").insert(registrationPeriods),
+      admin.from("registration_programs").insert(registrationPrograms),
       consentRows.length
         ? admin.from("registration_consents").insert(consentRows)
         : Promise.resolve({ error: null }),
@@ -276,11 +368,11 @@ export async function POST(request: Request) {
         final_amount: calculation.finalAmount,
         currency: calculation.currency,
       }),
-      calculation.discounts.length
+      discountUses.length
         ? admin.from("registration_discount_uses").insert(
-            calculation.discounts.map((discount) => ({
+            discountUses.map((discount) => ({
               registration_id: registration.id,
-              discount_id: discount.id,
+              discount_id: discount.discount_id,
               amount: discount.amount,
             })),
           )
@@ -288,10 +380,11 @@ export async function POST(request: Request) {
     ]);
     const writeError = writes.find((result) => result.error)?.error;
     if (writeError) throw writeError;
-    const method =
-      calculation.finalAmount === 0
+    const method = preregistration
+      ? "deferred"
+      : calculation.finalAmount === 0
         ? "free"
-        : program.payment_timing !== "immediate"
+        : !immediatePayment
           ? "reserve"
           : input.payment_method === "cash"
             ? "cash"
@@ -300,16 +393,29 @@ export async function POST(request: Request) {
       registration_id: registration.id,
       event_id: event.id,
       amount: calculation.finalAmount / 100,
-      status: calculation.finalAmount === 0 ? "paid" : "pending",
+      status:
+        !preregistration && calculation.finalAmount === 0 ? "paid" : "pending",
       method,
     });
     if (paymentError) throw paymentError;
-    await reserveCapacity(admin, {
-      eventId: event.id,
-      programId: program.id,
-      periodIds: input.period_ids,
-      registrationId: registration.id,
-    });
+    if (preregistration) {
+      await sendRegistrationEmail(
+        admin,
+        registration.id,
+        "preregistration_received",
+      );
+      return NextResponse.json({
+        success_url: `${appUrl(request)}/events/${event.slug}/register/success?method=preregistration&token=${registration.public_token}`,
+        queue_position: registration.queue_position,
+      });
+    }
+    for (const selection of input.selections)
+      await reserveCapacity(admin, {
+        eventId: event.id,
+        programId: selection.program_id,
+        periodIds: selection.period_ids,
+        registrationId: registration.id,
+      });
     if (method !== "stripe") {
       await confirmCapacity(admin, registration.id);
       await sendRegistrationEmail(
@@ -334,7 +440,9 @@ export async function POST(request: Request) {
             currency: calculation.currency.toLowerCase(),
             unit_amount: calculation.finalAmount,
             product_data: {
-              name: `Inscripción · ${event.title} · ${program.name}`,
+              name: `Inscripción · ${event.title} · ${programs
+                .map((program) => program.name)
+                .join(" + ")}`.slice(0, 127),
             },
           },
         },
@@ -369,6 +477,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: error.message }, { status: 409 });
     if (error instanceof PricingError)
       return NextResponse.json({ error: error.message }, { status: 400 });
+    if (
+      error instanceof Error &&
+      error.message.includes("PREREGISTRATION_FULL")
+    )
+      return NextResponse.json(
+        { error: "Se alcanzó el límite de preinscripciones." },
+        { status: 409 },
+      );
     console.error(
       "Dynamic registration failed",
       error instanceof Error ? error.message : "unknown",

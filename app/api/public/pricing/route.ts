@@ -6,8 +6,15 @@ import { calculateRegistrationPrice } from "@/lib/pricing/calculate-registration
 
 const schema = z.object({
   eventId: z.uuid(),
-  programId: z.uuid(),
-  periodIds: z.array(z.uuid()).min(1).max(52),
+  selections: z
+    .array(
+      z.object({
+        programId: z.uuid(),
+        periodIds: z.array(z.uuid()).min(1).max(52),
+      }),
+    )
+    .min(1)
+    .max(10),
   participantType: z.string().trim().min(2).max(40),
   discountCode: z.string().trim().max(40).optional(),
 });
@@ -32,7 +39,45 @@ export async function POST(request: Request) {
         { error: "Evento no disponible" },
         { status: 404 },
       );
-    const calculation = await calculateRegistrationPrice(parsed.data, admin);
+    const calculations = await Promise.all(
+      parsed.data.selections.map((selection) =>
+        calculateRegistrationPrice(
+          {
+            eventId: parsed.data.eventId,
+            programId: selection.programId,
+            periodIds: selection.periodIds,
+            participantType: parsed.data.participantType,
+            discountCode: parsed.data.discountCode,
+          },
+          admin,
+        ),
+      ),
+    );
+    const currencies = new Set(
+      calculations.map((calculation) => calculation.currency),
+    );
+    if (currencies.size !== 1)
+      throw new PricingError(
+        "NO_MATCHING_RULE",
+        "Las modalidades seleccionadas deben utilizar la misma moneda.",
+      );
+    const calculation = {
+      baseAmount: calculations.reduce(
+        (sum, calculation) => sum + calculation.baseAmount,
+        0,
+      ),
+      finalAmount: calculations.reduce(
+        (sum, calculation) => sum + calculation.finalAmount,
+        0,
+      ),
+      discounts: calculations.flatMap((calculation) => calculation.discounts),
+      currency: calculations[0].currency,
+      items: calculations.map((calculation, index) => ({
+        programId: parsed.data.selections[index].programId,
+        periodIds: parsed.data.selections[index].periodIds,
+        calculation,
+      })),
+    };
     return NextResponse.json({ calculation });
   } catch (error) {
     if (error instanceof PricingError)

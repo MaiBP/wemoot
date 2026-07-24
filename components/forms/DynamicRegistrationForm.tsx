@@ -24,7 +24,17 @@ type Calculation = {
   finalAmount: number;
   discounts: Array<{ name: string; amount: number }>;
   currency: string;
+  items?: Array<{
+    programId: string;
+    periodIds: string[];
+    calculation: {
+      baseAmount: number;
+      finalAmount: number;
+      currency: string;
+    };
+  }>;
 };
+type Selection = { programId: string; periodIds: string[] };
 const optionValue = (option: string | { label: string; value: string }) =>
   typeof option === "string" ? option : option.value;
 const optionLabel = (option: string | { label: string; value: string }) =>
@@ -39,6 +49,9 @@ export function DynamicRegistrationForm({
   periods,
   relations,
   includedItems,
+  registrationMode,
+  allowMultiplePrograms,
+  allowIndividualPeriods,
 }: {
   eventId: string;
   form: RegistrationFormRecord;
@@ -48,11 +61,13 @@ export function DynamicRegistrationForm({
   periods: EventPeriod[];
   relations: EventProgramPeriod[];
   includedItems: EventIncludedItem[];
+  registrationMode: "direct" | "preregistration";
+  allowMultiplePrograms: boolean;
+  allowIndividualPeriods: boolean;
 }) {
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<Record<string, unknown>>({});
-  const [programId, setProgramId] = useState("");
-  const [periodIds, setPeriodIds] = useState<string[]>([]);
+  const [selections, setSelections] = useState<Selection[]>([]);
   const [participantType, setParticipantType] = useState("non_member");
   const [discountCode, setDiscountCode] = useState("");
   const [method, setMethod] = useState<"cash" | "card">("cash");
@@ -71,11 +86,14 @@ export function DynamicRegistrationForm({
           (section.section_key !== "equipment" ||
             includedItems.some(
               (item) =>
-                (item.program_id == null || item.program_id === programId) &&
+                (item.program_id == null ||
+                  selections.some(
+                    (selection) => selection.programId === item.program_id,
+                  )) &&
                 item.requires_size,
             )),
       ),
-    [sections, includedItems, programId],
+    [sections, includedItems, selections],
   );
 
   useEffect(() => {
@@ -84,8 +102,21 @@ export function DynamicRegistrationForm({
         const saved = JSON.parse(localStorage.getItem(storageKey) ?? "null");
         if (saved) {
           setAnswers(saved.answers ?? {});
-          setProgramId(saved.programId ?? "");
-          setPeriodIds(saved.periodIds ?? []);
+          const restoredSelections =
+            saved.selections ??
+            (saved.programId
+              ? [
+                  {
+                    programId: saved.programId,
+                    periodIds: saved.periodIds ?? [],
+                  },
+                ]
+              : []);
+          setSelections(
+            allowMultiplePrograms
+              ? restoredSelections
+              : restoredSelections.slice(0, 1),
+          );
           setParticipantType(saved.participantType ?? "non_member");
           setStep(saved.step ?? 0);
         }
@@ -93,22 +124,14 @@ export function DynamicRegistrationForm({
       setHydrated(true);
     }, 0);
     return () => window.clearTimeout(timeout);
-  }, [storageKey]);
+  }, [allowMultiplePrograms, storageKey]);
   useEffect(() => {
     if (!hydrated) return;
     localStorage.setItem(
       storageKey,
-      JSON.stringify({ answers, programId, periodIds, participantType, step }),
+      JSON.stringify({ answers, selections, participantType, step }),
     );
-  }, [
-    answers,
-    programId,
-    periodIds,
-    participantType,
-    step,
-    storageKey,
-    hydrated,
-  ]);
+  }, [answers, selections, participantType, step, storageKey, hydrated]);
   useEffect(() => {
     const listener = (event: BeforeUnloadEvent) => {
       if (Object.keys(answers).length) event.preventDefault();
@@ -117,7 +140,10 @@ export function DynamicRegistrationForm({
     return () => window.removeEventListener("beforeunload", listener);
   }, [answers]);
   useEffect(() => {
-    if (!programId || !periodIds.length) {
+    if (
+      !selections.length ||
+      selections.some((selection) => !selection.periodIds.length)
+    ) {
       return;
     }
     const controller = new AbortController();
@@ -130,8 +156,7 @@ export function DynamicRegistrationForm({
         signal: controller.signal,
         body: JSON.stringify({
           eventId,
-          programId,
-          periodIds,
+          selections,
           participantType,
           discountCode: discountCode || undefined,
         }),
@@ -153,7 +178,7 @@ export function DynamicRegistrationForm({
       window.clearTimeout(timeout);
       controller.abort();
     };
-  }, [eventId, programId, periodIds, participantType, discountCode]);
+  }, [eventId, selections, participantType, discountCode]);
 
   const current = activeSections[step];
   const isReview = step === activeSections.length;
@@ -171,7 +196,9 @@ export function DynamicRegistrationForm({
     setError("");
     if (
       current?.section_key === "program_selection" &&
-      (!programId || !periodIds.length || !calculation)
+      (!selections.length ||
+        selections.some((selection) => !selection.periodIds.length) ||
+        !calculation)
     )
       return setError(
         "Selecciona modalidad y al menos una semana con precio disponible.",
@@ -199,8 +226,10 @@ export function DynamicRegistrationForm({
         body: JSON.stringify({
           event_id: eventId,
           form_id: form.id,
-          program_id: programId,
-          period_ids: periodIds,
+          selections: selections.map((selection) => ({
+            program_id: selection.programId,
+            period_ids: selection.periodIds,
+          })),
           participant_type: participantType,
           discount_code: discountCode || null,
           payment_method: calculation.finalAmount === 0 ? "cash" : method,
@@ -333,10 +362,17 @@ export function DynamicRegistrationForm({
               <div className="space-y-4 sm:col-span-2">
                 <ProgramSelector
                   programs={programs}
-                  value={programId}
-                  onChange={(value) => {
-                    setProgramId(value);
-                    setPeriodIds([]);
+                  values={selections.map((selection) => selection.programId)}
+                  allowMultiple={allowMultiplePrograms}
+                  onChange={(values) => {
+                    setSelections((current) =>
+                      values.map(
+                        (programId) =>
+                          current.find(
+                            (selection) => selection.programId === programId,
+                          ) ?? { programId, periodIds: [] },
+                      ),
+                    );
                     setCalculation(null);
                   }}
                 />
@@ -353,16 +389,38 @@ export function DynamicRegistrationForm({
                     <option value="goalkeeper">Portero</option>
                   </select>
                 </div>
-                <PeriodSelector
-                  periods={periods}
-                  relations={relations}
-                  programId={programId}
-                  values={periodIds}
-                  onChange={(values) => {
-                    setPeriodIds(values);
-                    setCalculation(null);
-                  }}
-                />
+                {selections.map((selection) => (
+                  <div
+                    key={selection.programId}
+                    className="rounded-xl bg-brand-black/[0.025] p-4"
+                  >
+                    <h3 className="mb-3 font-bold">
+                      {
+                        programs.find(
+                          (program) => program.id === selection.programId,
+                        )?.name
+                      }
+                    </h3>
+                    <PeriodSelector
+                      periods={periods}
+                      relations={relations}
+                      programId={selection.programId}
+                      values={selection.periodIds}
+                      showCapacity={registrationMode === "direct"}
+                      allowIndividualPeriods={allowIndividualPeriods}
+                      onChange={(values) => {
+                        setSelections((current) =>
+                          current.map((item) =>
+                            item.programId === selection.programId
+                              ? { ...item, periodIds: values }
+                              : item,
+                          ),
+                        );
+                        setCalculation(null);
+                      }}
+                    />
+                  </div>
+                ))}
                 <div>
                   <Label>Código de descuento</Label>
                   <Input
@@ -412,10 +470,23 @@ export function DynamicRegistrationForm({
               {String(answers.first_surname ?? "")}
             </p>
             <p>
-              <strong>Semanas:</strong> {periodIds.length}
+              <strong>Modalidades:</strong> {selections.length}
+            </p>
+            <p>
+              <strong>Periodos seleccionados:</strong>{" "}
+              {selections.reduce(
+                (total, selection) => total + selection.periodIds.length,
+                0,
+              )}
             </p>
           </div>
-          {calculation && calculation.finalAmount > 0 && (
+          {registrationMode === "preregistration" ? (
+            <div className="rounded-xl bg-brand-yellow/25 p-4 text-sm leading-6">
+              No realizarás ningún pago ahora. Guardaremos tu posición por orden
+              de llegada y te avisaremos cuando puedas confirmar las plazas
+              seleccionadas.
+            </div>
+          ) : calculation && calculation.finalAmount > 0 ? (
             <fieldset>
               <legend className="mb-2 font-medium">Forma de pago</legend>
               <label className="mr-5">
@@ -435,7 +506,7 @@ export function DynamicRegistrationForm({
                 Tarjeta
               </label>
             </fieldset>
-          )}
+          ) : null}
         </section>
       )}
       {error && (
@@ -457,7 +528,9 @@ export function DynamicRegistrationForm({
         {isReview ? (
           <Button disabled={submitting || !calculation} onClick={submit}>
             {submitting && <Loader2 className="size-4 animate-spin" />}{" "}
-            Confirmar inscripción
+            {registrationMode === "preregistration"
+              ? "Enviar preinscripción"
+              : "Confirmar inscripción"}
           </Button>
         ) : (
           <Button onClick={next}>Continuar</Button>
