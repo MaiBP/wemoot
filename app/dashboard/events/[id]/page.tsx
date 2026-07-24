@@ -93,7 +93,8 @@ export default async function EventDetailPage({
           .from("event_price_rules")
           .select("*")
           .eq("event_id", id)
-          .order("priority", { ascending: false }),
+          .order("priority", { ascending: false })
+          .order("created_at", { ascending: true }),
         supabase
           .from("event_discounts")
           .select("*")

@@ -6,6 +6,8 @@ import {
   type DiscountInput,
   type PriceRuleInput,
 } from "../lib/pricing/calculate-price.ts";
+import { inferRulePeriodIds } from "../lib/pricing/infer-rule-periods.ts";
+import type { EventPeriod, EventPriceRule } from "../types/event.ts";
 
 const rules: PriceRuleInput[] = [
   rule("member-1", "member", "period_bundle", 1, 1, "70.00", 10),
@@ -42,6 +44,50 @@ function rule(
     is_active: true,
   };
 }
+
+test("infiere semanas sólo cuando reglas y periodos coinciden exactamente", () => {
+  const periods = [1, 2, 3].map(
+    (position): EventPeriod => ({
+      id: `period-${position}`,
+      event_id: "event-1",
+      label: `Semana ${position}`,
+      start_date: `2026-07-${String(position * 7).padStart(2, "0")}`,
+      end_date: `2026-07-${String(position * 7 + 4).padStart(2, "0")}`,
+      active: true,
+      position: position - 1,
+    }),
+  );
+  const priceRules = ["club-1", "club-2", "club-3"].map(
+    (id, index): EventPriceRule => ({
+      id,
+      event_id: "event-1",
+      program_id: "program-1",
+      period_id: null,
+      participant_type: "member",
+      pricing_type: "per_period",
+      quantity_from: 1,
+      quantity_to: 1,
+      amount: 60 + index * 10,
+      currency: "EUR",
+      label: "Precio Club",
+      description: null,
+      priority: 100 - index,
+      starts_at: null,
+      ends_at: null,
+      legacy_price_id: null,
+      is_active: true,
+      created_at: `2026-01-0${index + 1}T00:00:00Z`,
+      updated_at: `2026-01-0${index + 1}T00:00:00Z`,
+    }),
+  );
+  const inferred = inferRulePeriodIds(priceRules, periods);
+  assert.equal(inferred.get("club-1"), "period-1");
+  assert.equal(inferred.get("club-2"), "period-2");
+  assert.equal(inferred.get("club-3"), "period-3");
+
+  const incomplete = inferRulePeriodIds(priceRules.slice(0, 2), periods);
+  assert.equal(incomplete.size, 0);
+});
 
 function discount(overrides: Partial<DiscountInput> = {}): DiscountInput {
   return {

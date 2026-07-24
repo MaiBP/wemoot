@@ -20,6 +20,7 @@ import {
 } from "@/lib/telegram";
 import type { AdvancedEventDraft } from "@/types/event";
 import {
+  applyNaturalProgramCorrection,
   complexMenuKeyboard,
   complexSummary,
   detectedEventKeyboard,
@@ -537,6 +538,148 @@ async function saveAdvancedStructure(
     if (updateError) throw updateError;
   }
 }
+
+async function saveTelegramEvent({
+  admin,
+  profileId,
+  collectedData,
+  forceDraft = false,
+}: {
+  admin: ReturnType<typeof createAdminClient>;
+  profileId: string;
+  collectedData: Record<string, unknown>;
+  forceDraft?: boolean;
+}) {
+  const advancedDraft = advancedEventDraftSchema
+    .catch({ programs: [], periods: [], prices: [], uncertainties: [] })
+    .parse(collectedData.advanced);
+  const isAdvanced = shouldUseComplexFlow(collectedData);
+  const parsed = isAdvanced
+    ? advancedEventBaseSchema.safeParse(collectedData)
+    : eventSchema.safeParse(collectedData);
+  if (!parsed.success) return { error: "incomplete" as const };
+
+  const minimumPrice = advancedDraft.prices.length
+    ? Math.min(...advancedDraft.prices.map((price) => price.amount))
+    : 0;
+  const totalCapacity = advancedDraft.programs.reduce(
+    (total, program) => total + (program.capacity ?? 0),
+    0,
+  );
+  const dashboardPublicationRequired =
+    requiresDashboardPublication(collectedData);
+  const saveOnly =
+    forceDraft ||
+    dashboardPublicationRequired ||
+    collectedData.telegram_save_mode === "draft";
+  const { data: organization } = await admin
+    .from("organizations")
+    .select("id")
+    .eq("owner_id", profileId)
+    .order("created_at")
+    .limit(1)
+    .maybeSingle();
+  const { data: event, error } = await admin
+    .from("events")
+    .insert({
+      ...parsed.data,
+      price: isAdvanced
+        ? minimumPrice
+        : (parsed.data as { price: number }).price,
+      capacity: isAdvanced
+        ? Math.max(totalCapacity, 1)
+        : (parsed.data as { capacity: number }).capacity,
+      ...(isAdvanced
+        ? {
+            event_mode: "advanced",
+            allow_multiple_programs:
+              collectedData.allow_multiple_programs !== false,
+            registration_mode:
+              collectedData.registration_mode === "preregistration"
+                ? "preregistration"
+                : "direct",
+            preregistration_limit:
+              collectedData.registration_mode === "preregistration"
+                ? Number(
+                    collectedData.preregistration_limit ??
+                      Math.max(totalCapacity, 1),
+                  )
+                : null,
+            payment_invitation_hours:
+              collectedData.registration_mode === "preregistration"
+                ? Number(collectedData.payment_invitation_hours ?? 24)
+                : 24,
+            general_settings: {
+              allow_individual_periods:
+                collectedData.allow_individual_periods !== false,
+              full_event_discount_percentage:
+                collectedData.full_event_discount_percentage ?? null,
+            },
+          }
+        : {}),
+      owner_id: profileId,
+      organization_id: organization?.id ?? null,
+      slug: createSlug(parsed.data.title),
+      payment_mode: "manual",
+      status: saveOnly ? "draft" : "published",
+      social_copy: String(collectedData.social_copy ?? ""),
+      whatsapp_message: String(collectedData.whatsapp_message ?? ""),
+      created_from: "telegram",
+    })
+    .select()
+    .single();
+  if (error) throw error;
+
+  if (isAdvanced) {
+    try {
+      await saveAdvancedStructure(admin, event.id, advancedDraft);
+      const fullEventDiscount = Number(
+        collectedData.full_event_discount_percentage ?? 0,
+      );
+      if (fullEventDiscount > 0) {
+        const { error: discountError } = await admin
+          .from("event_discounts")
+          .insert({
+            event_id: event.id,
+            name: "Campus completo",
+            description:
+              "Descuento automático al seleccionar todos los periodos.",
+            discount_type: "percentage",
+            discount_value: fullEventDiscount,
+            applies_to: "event",
+            min_periods: Math.max(advancedDraft.periods.length, 1),
+            priority: 100,
+            is_combinable: false,
+            is_active: true,
+          });
+        if (discountError) throw discountError;
+      }
+      const template = collectedData.registration_template;
+      if (
+        template === "football_campus_full" ||
+        template === "basic" ||
+        template === "blank"
+      )
+        await createRegistrationTemplate(admin, event.id, template);
+    } catch (structureError) {
+      await admin.from("events").delete().eq("id", event.id);
+      throw structureError;
+    }
+  }
+
+  return {
+    error: null,
+    completion: eventCompletionMessage({
+      collected: collectedData,
+      eventId: event.id,
+      slug: event.slug,
+      appUrl: process.env.NEXT_PUBLIC_APP_URL ?? "https://wemoot.com",
+      savedAsDraft: saveOnly,
+      dashboardPublicationRequired,
+    }),
+  };
+}
+
 export async function POST(request: Request) {
   const secret = request.headers.get("x-telegram-bot-api-secret-token");
   if (
@@ -955,6 +1098,28 @@ export async function POST(request: Request) {
         return NextResponse.json({ ok: true });
       }
       const result = handleComplexFlowStep(state.current_flow, text, existing);
+      if (result.action === "save_draft") {
+        const saved = await saveTelegramEvent({
+          admin,
+          profileId,
+          collectedData: result.collected,
+          forceDraft: true,
+        });
+        if (saved.error) {
+          await sendTelegramMessage(
+            chatId,
+            "El borrador está incompleto. Revisa los datos antes de guardarlo.",
+          );
+          return NextResponse.json({ ok: true });
+        }
+        await updateTelegramOnboardingState(admin, chatId, null, {});
+        await sendTelegramMessage(
+          chatId,
+          saved.completion.message,
+          saved.completion.keyboard,
+        );
+        return NextResponse.json({ ok: true });
+      }
       if (result.action === "list_previous_events") {
         const { data: events } = await admin
           .from("events")
@@ -1219,6 +1384,25 @@ export async function POST(request: Request) {
         result.action === "import" ||
         result.action === "import_guided"
       ) {
+        const guided = result.action === "import_guided";
+        const corrected =
+          guided && !imageReference
+            ? applyNaturalProgramCorrection(existing, text)
+            : null;
+        if (corrected) {
+          await updateTelegramOnboardingState(
+            admin,
+            chatId,
+            "event_creation_detected_confirmation",
+            corrected,
+          );
+          await sendTelegramMessage(
+            chatId,
+            `✅ Corrección aplicada.\n\n${detectedEventSummary(corrected)}`,
+            detectedEventKeyboard,
+          );
+          return NextResponse.json({ ok: true });
+        }
         const attachment = imageReference
           ? await downloadTelegramImage(imageReference)
           : undefined;
@@ -1236,7 +1420,6 @@ export async function POST(request: Request) {
           event_mode: "advanced",
           advanced: imported.advanced ?? existing.advanced,
         };
-        const guided = result.action === "import_guided";
         const nextFlow = guided
           ? "event_creation_detected_confirmation"
           : imported.missing_fields.length
@@ -1282,14 +1465,13 @@ export async function POST(request: Request) {
     }
     if (state?.current_flow === "awaiting_confirmation" && yes.test(text)) {
       const collectedData = state.collected_data as Record<string, unknown>;
-      const advancedDraft = advancedEventDraftSchema
-        .catch({ programs: [], periods: [], prices: [], uncertainties: [] })
-        .parse(collectedData.advanced);
-      const isAdvanced = shouldUseComplexFlow(collectedData);
-      const parsed = isAdvanced
-        ? advancedEventBaseSchema.safeParse(collectedData)
-        : eventSchema.safeParse(collectedData);
-      if (!parsed.success) {
+      const saved = await saveTelegramEvent({
+        admin,
+        profileId,
+        collectedData,
+        forceDraft: /^(guardar borrador|confirmar borrador)$/i.test(text),
+      });
+      if (saved.error) {
         await sendTelegramMessage(
           chatId,
           "El borrador está incompleto. Empecemos de nuevo: descríbeme el evento.",
@@ -1304,113 +1486,6 @@ export async function POST(request: Request) {
           .eq("telegram_chat_id", chatId);
         return NextResponse.json({ ok: true });
       }
-      const copy = collectedData;
-      const minimumPrice = advancedDraft.prices.length
-        ? Math.min(...advancedDraft.prices.map((price) => price.amount))
-        : 0;
-      const totalCapacity = advancedDraft.programs.reduce(
-        (total, program) => total + (program.capacity ?? 0),
-        0,
-      );
-      const dashboardPublicationRequired =
-        requiresDashboardPublication(collectedData);
-      const saveOnly =
-        dashboardPublicationRequired ||
-        collectedData.telegram_save_mode === "draft" ||
-        /^(guardar borrador|confirmar borrador)$/i.test(text);
-      const { data: organization } = await admin
-        .from("organizations")
-        .select("id")
-        .eq("owner_id", profileId)
-        .order("created_at")
-        .limit(1)
-        .maybeSingle();
-      const { data: event, error } = await admin
-        .from("events")
-        .insert({
-          ...parsed.data,
-          price: isAdvanced
-            ? minimumPrice
-            : (parsed.data as { price: number }).price,
-          capacity: isAdvanced
-            ? Math.max(totalCapacity, 1)
-            : (parsed.data as { capacity: number }).capacity,
-          ...(isAdvanced
-            ? {
-                event_mode: "advanced",
-                allow_multiple_programs:
-                  collectedData.allow_multiple_programs !== false,
-                registration_mode:
-                  collectedData.registration_mode === "preregistration"
-                    ? "preregistration"
-                    : "direct",
-                preregistration_limit:
-                  collectedData.registration_mode === "preregistration"
-                    ? Number(
-                        collectedData.preregistration_limit ??
-                          Math.max(totalCapacity, 1),
-                      )
-                    : null,
-                payment_invitation_hours:
-                  collectedData.registration_mode === "preregistration"
-                    ? Number(collectedData.payment_invitation_hours ?? 24)
-                    : 24,
-                general_settings: {
-                  allow_individual_periods:
-                    collectedData.allow_individual_periods !== false,
-                  full_event_discount_percentage:
-                    collectedData.full_event_discount_percentage ?? null,
-                },
-              }
-            : {}),
-          owner_id: profileId,
-          organization_id: organization?.id ?? null,
-          slug: createSlug(parsed.data.title),
-          payment_mode: "manual",
-          status: saveOnly ? "draft" : "published",
-          social_copy: String(copy.social_copy ?? ""),
-          whatsapp_message: String(copy.whatsapp_message ?? ""),
-          created_from: "telegram",
-        })
-        .select()
-        .single();
-      if (error) throw error;
-      if (isAdvanced) {
-        try {
-          await saveAdvancedStructure(admin, event.id, advancedDraft);
-          const fullEventDiscount = Number(
-            collectedData.full_event_discount_percentage ?? 0,
-          );
-          if (fullEventDiscount > 0) {
-            const { error: discountError } = await admin
-              .from("event_discounts")
-              .insert({
-                event_id: event.id,
-                name: "Campus completo",
-                description:
-                  "Descuento automático al seleccionar todos los periodos.",
-                discount_type: "percentage",
-                discount_value: fullEventDiscount,
-                applies_to: "event",
-                min_periods: Math.max(advancedDraft.periods.length, 1),
-                priority: 100,
-                is_combinable: false,
-                is_active: true,
-              });
-            if (discountError) throw discountError;
-          }
-          const template = collectedData.registration_template;
-          if (
-            template === "football_campus_full" ||
-            template === "basic" ||
-            template === "blank"
-          )
-            await createRegistrationTemplate(admin, event.id, template);
-        } catch (structureError) {
-          await admin.from("events").delete().eq("id", event.id);
-          throw structureError;
-        }
-      }
       await admin
         .from("conversation_states")
         .update({
@@ -1420,18 +1495,10 @@ export async function POST(request: Request) {
           last_message: text,
         })
         .eq("telegram_chat_id", chatId);
-      const completion = eventCompletionMessage({
-        collected: collectedData,
-        eventId: event.id,
-        slug: event.slug,
-        appUrl: process.env.NEXT_PUBLIC_APP_URL ?? "https://wemoot.com",
-        savedAsDraft: saveOnly,
-        dashboardPublicationRequired,
-      });
       await sendTelegramMessage(
         chatId,
-        completion.message,
-        completion.keyboard,
+        saved.completion.message,
+        saved.completion.keyboard,
       );
       return NextResponse.json({ ok: true });
     }

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  applyNaturalProgramCorrection,
   expandInterpretedPrices,
   generateWeeklyPeriods,
   getAdvancedDraft,
@@ -136,8 +137,10 @@ test("muestra las fechas del periodo en la regla de precio", () => {
       },
     ],
   );
-  assert.match(preview, /Periodo del 22 al 26 de junio/);
-  assert.match(preview, /90 €/);
+  assert.match(
+    preview,
+    /Del 22 al 26 de junio · Tecnificación · Tarifa semana 1 €90/,
+  );
 });
 
 test("muestra ambos meses cuando el periodo cruza de mes", () => {
@@ -175,14 +178,15 @@ test("elige la plantilla Campus completo", () => {
   assert.equal(result.flow, "complex_menu");
 });
 
-test("solicita confirmación antes de guardar el borrador", () => {
+test("guarda el borrador sin pedir una segunda confirmación", () => {
   const result = handleComplexFlowStep(
     "complex_menu",
     "Guardar borrador",
     collected,
   );
   assert.equal(result.flow, "awaiting_confirmation");
-  assert.equal(result.action, "prepare_save");
+  assert.equal(result.action, "save_draft");
+  assert.equal(result.keyboard, undefined);
 });
 
 test("configura modalidades combinables y preinscripción desde Telegram", () => {
@@ -526,6 +530,38 @@ test("permite corregir y eliminar modalidades antes de continuar", () => {
   assert.equal(result.flow, "guided_program_edit_select");
 });
 
+test("aplica una corrección natural al turno y horario de una modalidad", () => {
+  const editable = {
+    ...collected,
+    advanced: {
+      programs: [
+        {
+          name: "Preparación física",
+          turn: "morning" as const,
+          start_time: "09:00",
+          end_time: "14:00",
+          capacity: 20,
+          payment_timing: "immediate" as const,
+          included_items: [],
+        },
+      ],
+      periods: [],
+      prices: [],
+      uncertainties: [],
+    },
+  };
+  const corrected = applyNaturalProgramCorrection(
+    editable,
+    "Preparación física tarde de 17:30 a 18:30hs",
+  );
+  assert.ok(corrected);
+  const program = getAdvancedDraft(corrected).programs[0];
+  assert.equal(program.turn, "afternoon");
+  assert.equal(program.start_time, "17:30");
+  assert.equal(program.end_time, "18:30");
+  assert.equal(getAdvancedDraft(corrected).programs.length, 1);
+});
+
 test("obliga a publicar eventos complejos desde el dashboard", () => {
   const complex = {
     ...collected,
@@ -575,6 +611,8 @@ test("obliga a publicar eventos complejos desde el dashboard", () => {
   );
   assert.equal(result.flow, "awaiting_confirmation");
   assert.equal(result.collected.telegram_save_mode, "draft");
+  assert.equal(result.action, "save_draft");
+  assert.equal(result.keyboard, undefined);
 });
 
 test("permite publicar desde Telegram con hasta dos modalidades y periodos", () => {

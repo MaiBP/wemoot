@@ -1,5 +1,6 @@
 import type { AdvancedEventDraft } from "@/types/event";
 import type { RegistrationTemplateKey } from "@/lib/forms/create-registration-template";
+import { formatPeriodDateRange } from "../period-format.ts";
 
 export type ComplexFlowName =
   | "event_creation_method"
@@ -50,7 +51,8 @@ export interface ComplexFlowResult {
     | "import_guided"
     | "list_previous_events"
     | "copy_event"
-    | "prepare_save";
+    | "prepare_save"
+    | "save_draft";
 }
 
 export const eventCreationMethodKeyboard = [
@@ -290,6 +292,46 @@ export function parsePeriodDates(value: string) {
   );
   if (!match || match[2] < match[1]) return null;
   return { start_date: match[1], end_date: match[2] };
+}
+
+export function applyNaturalProgramCorrection(
+  collected: Record<string, unknown>,
+  text: string,
+) {
+  const advanced = getAdvancedDraft(collected);
+  const normalizedText = normalizeTelegramChoice(text);
+  const matches = advanced.programs
+    .map((program, index) => ({
+      index,
+      normalizedName: normalizeTelegramChoice(program.name),
+    }))
+    .filter(({ normalizedName }) => normalizedText.includes(normalizedName))
+    .sort(
+      (left, right) => right.normalizedName.length - left.normalizedName.length,
+    );
+  if (!matches.length) return null;
+
+  const schedule = parseTimeRange(text);
+  const turn = /\btarde\b/i.test(normalizedText)
+    ? ("afternoon" as const)
+    : /\bmanana\b/i.test(normalizedText)
+      ? ("morning" as const)
+      : null;
+  if (!schedule && !turn) return null;
+
+  const programs = advanced.programs.map((program, index) =>
+    index === matches[0].index
+      ? {
+          ...program,
+          ...(turn ? { turn } : {}),
+          ...(schedule ?? {}),
+        }
+      : program,
+  );
+  return {
+    ...collected,
+    advanced: { ...advanced, programs },
+  };
 }
 
 export function complexSummary(collected: Record<string, unknown>) {
@@ -1065,9 +1107,8 @@ export function handleComplexFlowStep(
           telegram_save_mode: "draft",
           telegram_open_dashboard: choice.includes("revisar dashboard"),
         },
-        action: "prepare_save",
-        message: `${complexSummary(collected)}\n\nGuardaré el evento como borrador y te daré el enlace del dashboard. ¿Confirmas?`,
-        keyboard: [["Confirmar borrador"], ["Cancelar"]],
+        action: "save_draft",
+        message: "Estoy guardando el evento como borrador.",
       };
     return finalReview(collected);
   }
@@ -1133,10 +1174,9 @@ export function handleComplexFlowStep(
     if (choice === "guardar borrador")
       return {
         flow: "awaiting_confirmation",
-        collected,
-        action: "prepare_save",
-        message: `${complexSummary(collected)}\n\nGuardaré el evento como borrador para revisarlo en el dashboard. ¿Confirmas?`,
-        keyboard: [["Confirmar borrador", "Cancelar"]],
+        collected: { ...collected, telegram_save_mode: "draft" },
+        action: "save_draft",
+        message: "Estoy guardando el evento como borrador.",
       };
     return menu(collected, "No reconocí esa opción.");
   }
@@ -1561,48 +1601,6 @@ export function handleComplexFlowStep(
   };
 }
 
-const spanishMonths = [
-  "enero",
-  "febrero",
-  "marzo",
-  "abril",
-  "mayo",
-  "junio",
-  "julio",
-  "agosto",
-  "septiembre",
-  "octubre",
-  "noviembre",
-  "diciembre",
-];
-
-export function formatPeriodDateRange(
-  period: AdvancedEventDraft["periods"][number],
-) {
-  const parse = (value: string) => {
-    const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    return match
-      ? { year: Number(match[1]), month: Number(match[2]), day: Number(match[3]) }
-      : null;
-  };
-  const start = parse(period.start_date);
-  const end = parse(period.end_date);
-  if (
-    !start ||
-    !end ||
-    start.month < 1 ||
-    start.month > 12 ||
-    end.month < 1 ||
-    end.month > 12
-  )
-    return null;
-  if (start.year === end.year && start.month === end.month)
-    return `Periodo del ${start.day} al ${end.day} de ${spanishMonths[start.month - 1]}`;
-  if (start.year === end.year)
-    return `Periodo del ${start.day} de ${spanishMonths[start.month - 1]} al ${end.day} de ${spanishMonths[end.month - 1]}`;
-  return `Periodo del ${start.day} de ${spanishMonths[start.month - 1]} de ${start.year} al ${end.day} de ${spanishMonths[end.month - 1]} de ${end.year}`;
-}
-
 export function pricingPreview(
   prices: AdvancedEventDraft["prices"],
   periods: AdvancedEventDraft["periods"] = [],
@@ -1622,7 +1620,17 @@ export function pricingPreview(
           : normalizeTelegramChoice(price.label).includes(candidateLabel);
       });
       const dateRange = period ? formatPeriodDateRange(period) : null;
-      return `• ${price.program_name} · ${price.label}${dateRange ? ` · ${dateRange}` : ""} · ${audience}: ${price.amount} €`;
+      const periodFirst = dateRange
+        ? dateRange.replace(/^Periodo d/, "D")
+        : price.pricing_type === "full_event"
+          ? "Todo el evento"
+          : "Sin periodo definido";
+      const audienceSuffix =
+        price.label.toLowerCase().includes(audience.toLowerCase()) ||
+        price.audience === "all"
+          ? ""
+          : ` (${audience})`;
+      return `• ${periodFirst} · ${price.program_name} · ${price.label}${audienceSuffix} €${price.amount}`;
     })
     .join("\n");
 }

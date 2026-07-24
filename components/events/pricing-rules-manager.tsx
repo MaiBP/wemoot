@@ -10,6 +10,8 @@ import type {
   EventProgram,
 } from "@/types/event";
 import { formatCurrency } from "@/lib/utils";
+import { formatPeriodDateRange } from "@/lib/period-format";
+import { inferRulePeriodIds } from "@/lib/pricing/infer-rule-periods";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,6 +35,26 @@ const pricingNames: Record<string, string> = {
   manual: "Manual",
 };
 
+function getRulePeriod(
+  rule: EventPriceRule,
+  periods: EventPeriod[],
+  inferredPeriodIds: Map<string, string>,
+) {
+  const inferredPeriodId = inferredPeriodIds.get(rule.id);
+  const period = periods.find(
+    (item) => item.id === (rule.period_id ?? inferredPeriodId),
+  );
+  if (period)
+    return {
+      label: period.label,
+      dates: formatPeriodDateRange(period),
+      inferred: Boolean(!rule.period_id && inferredPeriodId),
+    };
+  if (rule.pricing_type === "full_event")
+    return { label: "Todos los periodos", dates: null, inferred: false };
+  return { label: "Cualquier periodo", dates: null, inferred: false };
+}
+
 export function PricingRulesManager({
   eventId,
   programs,
@@ -50,6 +72,7 @@ export function PricingRulesManager({
   const [open, setOpen] = useState<"rule" | "discount" | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const inferredPeriodIds = inferRulePeriodIds(rules, periods);
 
   async function save(kind: "price_rule" | "discount", formData: FormData) {
     setBusy(true);
@@ -124,12 +147,84 @@ export function PricingRulesManager({
             <Plus className="size-4" /> Añadir
           </Button>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
+        <div className="grid gap-3 md:hidden">
+          {rules.map((rule) => {
+            const period = getRulePeriod(rule, periods, inferredPeriodIds);
+            return (
+              <article key={rule.id} className="rounded-xl border p-4 text-sm">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <strong className="block">
+                      {rule.label || pricingNames[rule.pricing_type]}
+                    </strong>
+                    <span className="text-xs text-brand-black/50">
+                      {pricingNames[rule.pricing_type]}
+                    </span>
+                  </div>
+                  <strong>{formatCurrency(Number(rule.amount))}</strong>
+                </div>
+                <div className="mt-3 rounded-lg bg-brand-cyan/10 p-3">
+                  <span className="text-xs font-medium uppercase tracking-wide text-brand-black/45">
+                    Periodo
+                  </span>
+                  <strong className="mt-1 block">{period.label}</strong>
+                  {period.dates && (
+                    <span className="text-xs text-brand-black/60">
+                      {period.dates}
+                    </span>
+                  )}
+                  {period.inferred && (
+                    <span className="mt-1 block text-xs text-brand-magenta">
+                      Asignado por orden; revisa la relación.
+                    </span>
+                  )}
+                </div>
+                <dl className="mt-3 grid grid-cols-2 gap-3 text-xs">
+                  <div>
+                    <dt className="text-brand-black/45">Modalidad</dt>
+                    <dd className="font-medium">
+                      {programs.find((item) => item.id === rule.program_id)
+                        ?.name ?? "Todo el evento"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-brand-black/45">Participante</dt>
+                    <dd className="font-medium">
+                      {participantNames[rule.participant_type]}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-brand-black/45">Cantidad</dt>
+                    <dd className="font-medium">
+                      {rule.quantity_from ?? "–"}
+                      {rule.quantity_to !== rule.quantity_from
+                        ? `–${rule.quantity_to ?? "∞"}`
+                        : ""}
+                    </dd>
+                  </div>
+                  <div className="flex items-end justify-end gap-1">
+                    {rule.legacy_price_id && <Badge>Importada</Badge>}
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      aria-label="Eliminar regla"
+                      onClick={() => remove("price_rule", rule.id)}
+                    >
+                      <Trash2 className="size-4" />
+                    </Button>
+                  </div>
+                </dl>
+              </article>
+            );
+          })}
+        </div>
+        <div className="hidden overflow-x-auto md:block">
+          <table className="w-full min-w-[900px] text-left text-sm">
             <thead className="border-b text-xs uppercase text-brand-black/45">
               <tr>
                 <th className="py-2">Regla</th>
                 <th>Modalidad</th>
+                <th>Periodo</th>
                 <th>Participante</th>
                 <th>Cantidad</th>
                 <th>Importe</th>
@@ -138,54 +233,74 @@ export function PricingRulesManager({
               </tr>
             </thead>
             <tbody className="divide-y">
-              {rules.map((rule) => (
-                <tr key={rule.id}>
-                  <td className="py-3">
-                    <strong className="block">
-                      {rule.label || pricingNames[rule.pricing_type]}
-                    </strong>
-                    <span className="text-xs text-brand-black/50">
-                      {pricingNames[rule.pricing_type]}
-                    </span>
-                  </td>
-                  <td>
-                    {programs.find((item) => item.id === rule.program_id)
-                      ?.name ?? "Todo el evento"}
-                  </td>
-                  <td>{participantNames[rule.participant_type]}</td>
-                  <td>
-                    {rule.quantity_from ?? "–"}
-                    {rule.quantity_to !== rule.quantity_from
-                      ? `–${rule.quantity_to ?? "∞"}`
-                      : ""}
-                  </td>
-                  <td className="font-semibold">
-                    {formatCurrency(Number(rule.amount))}
-                  </td>
-                  <td>{rule.priority}</td>
-                  <td>
-                    <div className="flex items-center justify-end gap-1">
-                      {rule.legacy_price_id && <Badge>Importada</Badge>}
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        aria-label="Eliminar regla"
-                        onClick={() => remove("price_rule", rule.id)}
-                      >
-                        <Trash2 className="size-4" />
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {rules.map((rule) => {
+                const period = getRulePeriod(
+                  rule,
+                  periods,
+                  inferredPeriodIds,
+                );
+                return (
+                  <tr key={rule.id}>
+                    <td className="py-3">
+                      <strong className="block">
+                        {rule.label || pricingNames[rule.pricing_type]}
+                      </strong>
+                      <span className="text-xs text-brand-black/50">
+                        {pricingNames[rule.pricing_type]}
+                      </span>
+                    </td>
+                    <td>
+                      {programs.find((item) => item.id === rule.program_id)
+                        ?.name ?? "Todo el evento"}
+                    </td>
+                    <td>
+                      <strong className="block text-xs">{period.label}</strong>
+                      {period.dates && (
+                        <span className="text-xs text-brand-black/50">
+                          {period.dates}
+                        </span>
+                      )}
+                      {period.inferred && (
+                        <span className="block text-xs text-brand-magenta">
+                          Asignado por orden; revisar
+                        </span>
+                      )}
+                    </td>
+                    <td>{participantNames[rule.participant_type]}</td>
+                    <td>
+                      {rule.quantity_from ?? "–"}
+                      {rule.quantity_to !== rule.quantity_from
+                        ? `–${rule.quantity_to ?? "∞"}`
+                        : ""}
+                    </td>
+                    <td className="font-semibold">
+                      {formatCurrency(Number(rule.amount))}
+                    </td>
+                    <td>{rule.priority}</td>
+                    <td>
+                      <div className="flex items-center justify-end gap-1">
+                        {rule.legacy_price_id && <Badge>Importada</Badge>}
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          aria-label="Eliminar regla"
+                          onClick={() => remove("price_rule", rule.id)}
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
-          {!rules.length && (
-            <p className="py-4 text-sm text-brand-black/50">
-              Todavía no hay reglas de precio.
-            </p>
-          )}
         </div>
+        {!rules.length && (
+          <p className="py-4 text-sm text-brand-black/50">
+            Todavía no hay reglas de precio.
+          </p>
+        )}
         {open === "rule" && (
           <form
             action={(data) => save("price_rule", data)}
