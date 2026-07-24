@@ -7,8 +7,12 @@ import {
   handleComplexFlowStep,
   complexSummary,
   detectedEventSummary,
+  eventCompletionMessage,
+  pricingPreview,
+  requiresDashboardPublication,
   shouldUseComplexFlow,
 } from "../lib/telegram/complex-event-flow.ts";
+import { getTelegramImageReference } from "../lib/telegram.ts";
 
 const baseEvent = {
   title: "Campus de Tecnificación Verano",
@@ -110,6 +114,57 @@ test("normaliza precios interpretados y los aplica a cada programa", () => {
   );
 });
 
+test("muestra las fechas del periodo en la regla de precio", () => {
+  const preview = pricingPreview(
+    [
+      {
+        program_name: "Tecnificación",
+        period_label: "Semana 1",
+        label: "Tarifa semana 1",
+        audience: "all",
+        amount: 90,
+        pricing_type: "fixed",
+        quantity_from: null,
+        quantity_to: null,
+      },
+    ],
+    [
+      {
+        label: "Semana 1",
+        start_date: "2026-06-22",
+        end_date: "2026-06-26",
+      },
+    ],
+  );
+  assert.match(preview, /Periodo del 22 al 26 de junio/);
+  assert.match(preview, /90 €/);
+});
+
+test("muestra ambos meses cuando el periodo cruza de mes", () => {
+  const preview = pricingPreview(
+    [
+      {
+        program_name: "Campus",
+        period_label: "Semana especial",
+        label: "Tarifa especial",
+        audience: "member",
+        amount: 120,
+        pricing_type: "fixed",
+        quantity_from: null,
+        quantity_to: null,
+      },
+    ],
+    [
+      {
+        label: "Semana especial",
+        start_date: "2026-06-29",
+        end_date: "2026-07-03",
+      },
+    ],
+  );
+  assert.match(preview, /29 de junio al 3 de julio/);
+});
+
 test("elige la plantilla Campus completo", () => {
   const result = handleComplexFlowStep(
     "complex_form_template",
@@ -188,7 +243,28 @@ test("inicia el asistente guiado con imágenes", () => {
   );
   assert.equal(result.flow, "event_creation_images");
   assert.equal(result.collected.guided_creation, true);
-  assert.match(result.message, /imágenes/i);
+  assert.match(result.message, /varias imágenes seguidas/i);
+  assert.match(result.message, /nítidas/i);
+  assert.deepEqual(result.keyboard?.[0], ["🔎 Analizar imágenes"]);
+});
+
+test("guarda la referencia de la imagen sin descargarla ni analizarla", () => {
+  const reference = getTelegramImageReference({
+    message_id: 10,
+    chat: { id: 20 },
+    caption: "Tarifas del campus",
+    photo: [
+      { file_id: "small", width: 100, height: 100 },
+      { file_id: "large", width: 1200, height: 1200, file_size: 500000 },
+    ],
+  });
+  assert.deepEqual(reference, {
+    fileId: "large",
+    fileSize: 500000,
+    mimeType: "image/jpeg",
+    fileName: "cartel.jpg",
+    caption: "Tarifas del campus",
+  });
 });
 
 test("muestra un resumen estructurado de lo detectado", () => {
@@ -239,7 +315,18 @@ test("el flujo guiado pregunta aforo, inscripción y formulario", () => {
           included_items: [],
         },
       ],
-      periods: [],
+      periods: [
+        {
+          label: "Semana 1",
+          start_date: "2026-06-22",
+          end_date: "2026-06-26",
+        },
+        {
+          label: "Semana 2",
+          start_date: "2026-06-29",
+          end_date: "2026-07-03",
+        },
+      ],
       prices: [],
       uncertainties: [],
     },
@@ -319,4 +406,239 @@ test("configura semanas individuales y descuento de campus completo", () => {
   );
   assert.equal(result.flow, "complex_registration_mode");
   assert.equal(result.collected.full_event_discount_percentage, 20);
+});
+
+test("permite corregir y eliminar modalidades antes de continuar", () => {
+  const editable = {
+    ...collected,
+    guided_creation: true,
+    advanced: {
+      programs: [
+        {
+          name: "Mañana",
+          turn: "morning" as const,
+          start_time: "09:00",
+          end_time: "14:00",
+          min_age: 6,
+          max_age: 14,
+          capacity: 30,
+          payment_timing: "immediate" as const,
+          included_items: [],
+        },
+        {
+          name: "Tarde",
+          turn: "afternoon" as const,
+          capacity: 20,
+          payment_timing: "immediate" as const,
+          included_items: [],
+        },
+      ],
+      periods: [],
+      prices: [
+        {
+          program_name: "Mañana",
+          period_label: null,
+          label: "Tarifa mañana",
+          audience: "all" as const,
+          amount: 100,
+          pricing_type: "fixed" as const,
+          quantity_from: null,
+          quantity_to: null,
+        },
+        {
+          program_name: "Tarde",
+          period_label: null,
+          label: "Tarifa tarde",
+          audience: "all" as const,
+          amount: 80,
+          pricing_type: "fixed" as const,
+          quantity_from: null,
+          quantity_to: null,
+        },
+      ],
+      uncertainties: [],
+    },
+  };
+  let result = handleComplexFlowStep(
+    "event_creation_detected_confirmation",
+    "⚽ Editar modalidades",
+    editable,
+  );
+  assert.equal(result.flow, "guided_program_edit_select");
+  result = handleComplexFlowStep(
+    "guided_program_edit_select",
+    "1. Mañana",
+    result.collected,
+  );
+  result = handleComplexFlowStep(
+    "guided_program_edit_menu",
+    "Nombre",
+    result.collected,
+  );
+  result = handleComplexFlowStep(
+    "guided_program_edit_name",
+    "Tecnificación",
+    result.collected,
+  );
+  assert.equal(
+    getAdvancedDraft(result.collected).programs[0].name,
+    "Tecnificación",
+  );
+  assert.equal(
+    getAdvancedDraft(result.collected).prices[0].program_name,
+    "Tecnificación",
+  );
+
+  result = handleComplexFlowStep(
+    "guided_program_edit_select",
+    "1. Tecnificación",
+    result.collected,
+  );
+  result = handleComplexFlowStep(
+    "guided_program_edit_menu",
+    "Plazas",
+    result.collected,
+  );
+  result = handleComplexFlowStep(
+    "guided_program_edit_capacity",
+    "40",
+    result.collected,
+  );
+  assert.equal(getAdvancedDraft(result.collected).programs[0].capacity, 40);
+
+  result = handleComplexFlowStep(
+    "guided_program_edit_select",
+    "2. Tarde",
+    result.collected,
+  );
+  result = handleComplexFlowStep(
+    "guided_program_edit_menu",
+    "🗑️ Eliminar modalidad",
+    result.collected,
+  );
+  result = handleComplexFlowStep(
+    "guided_program_delete_confirmation",
+    "Sí, eliminar",
+    result.collected,
+  );
+  assert.equal(getAdvancedDraft(result.collected).programs.length, 1);
+  assert.equal(getAdvancedDraft(result.collected).prices.length, 1);
+  assert.equal(result.flow, "guided_program_edit_select");
+});
+
+test("obliga a publicar eventos complejos desde el dashboard", () => {
+  const complex = {
+    ...collected,
+    guided_creation: true,
+    registration_template: "football_campus_full",
+    advanced: {
+      programs: ["Mañana", "Tarde", "Porteros"].map((name) => ({
+        name,
+        turn: "custom" as const,
+        capacity: 20,
+        payment_timing: "immediate" as const,
+        included_items: [],
+      })),
+      periods: [
+        {
+          label: "Semana 1",
+          start_date: "2026-06-22",
+          end_date: "2026-06-26",
+        },
+      ],
+      prices: [],
+      uncertainties: [],
+    },
+  };
+  assert.equal(requiresDashboardPublication(complex), true);
+  let result = handleComplexFlowStep(
+    "guided_form_review",
+    "✅ Está bien",
+    complex,
+  );
+  assert.equal(result.flow, "guided_final_review");
+  assert.doesNotMatch(result.keyboard?.flat().join(" ") ?? "", /🚀 Publicar/);
+  assert.match(result.message, /publicarlo desde el dashboard/i);
+
+  result = handleComplexFlowStep(
+    "guided_final_review",
+    "🚀 Publicar",
+    result.collected,
+  );
+  assert.equal(result.flow, "guided_final_review");
+  assert.equal(result.action, undefined);
+
+  result = handleComplexFlowStep(
+    "guided_final_review",
+    "👀 Guardar y revisar dashboard",
+    result.collected,
+  );
+  assert.equal(result.flow, "awaiting_confirmation");
+  assert.equal(result.collected.telegram_save_mode, "draft");
+});
+
+test("permite publicar desde Telegram con hasta dos modalidades y periodos", () => {
+  const simple = {
+    ...collected,
+    advanced: {
+      programs: ["Mañana", "Tarde"].map((name) => ({
+        name,
+        turn: "custom" as const,
+        capacity: 20,
+        payment_timing: "immediate" as const,
+        included_items: [],
+      })),
+      periods: [
+        {
+          label: "Turno 1",
+          start_date: "2026-06-22",
+          end_date: "2026-06-26",
+        },
+        {
+          label: "Turno 2",
+          start_date: "2026-06-29",
+          end_date: "2026-07-03",
+        },
+      ],
+      prices: [],
+      uncertainties: [],
+    },
+  };
+  assert.equal(requiresDashboardPublication(simple), false);
+});
+
+test("cierra un evento publicado con enlaces y acciones útiles", () => {
+  const completion = eventCompletionMessage({
+    collected: { ...collected, title: "Campus de verano" },
+    eventId: "event-123",
+    slug: "campus-verano",
+    appUrl: "https://wemoot.com/",
+    savedAsDraft: false,
+    dashboardPublicationRequired: false,
+  });
+  assert.match(completion.message, /Evento publicado correctamente/);
+  assert.match(
+    completion.message,
+    /https:\/\/wemoot\.com\/events\/campus-verano\/register/,
+  );
+  assert.deepEqual(completion.keyboard[0], ["Crear otro evento"]);
+  assert.deepEqual(completion.keyboard[1], ["Mis eventos", "Ver dashboard"]);
+});
+
+test("cierra un evento complejo indicando la revisión obligatoria", () => {
+  const completion = eventCompletionMessage({
+    collected: { ...collected, title: "Campus avanzado" },
+    eventId: "event-456",
+    slug: "campus-avanzado",
+    appUrl: "https://wemoot.com",
+    savedAsDraft: true,
+    dashboardPublicationRequired: true,
+  });
+  assert.match(completion.message, /quedó preparado como borrador/);
+  assert.match(completion.message, /publicación se realiza desde allí/);
+  assert.match(
+    completion.message,
+    /https:\/\/wemoot\.com\/dashboard\/events\/event-456/,
+  );
+  assert.deepEqual(completion.keyboard[0], ["Ver dashboard"]);
 });

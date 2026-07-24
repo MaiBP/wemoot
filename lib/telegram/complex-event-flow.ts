@@ -8,6 +8,14 @@ export type ComplexFlowName =
   | "event_creation_detected_confirmation"
   | "event_creation_copy"
   | "guided_program_capacity"
+  | "guided_program_edit_select"
+  | "guided_program_edit_menu"
+  | "guided_program_edit_name"
+  | "guided_program_edit_turn"
+  | "guided_program_edit_schedule"
+  | "guided_program_edit_ages"
+  | "guided_program_edit_capacity"
+  | "guided_program_delete_confirmation"
   | "guided_period_selection"
   | "guided_full_event_discount"
   | "guided_full_event_discount_value"
@@ -54,7 +62,8 @@ export const eventCreationMethodKeyboard = [
 
 export const detectedEventKeyboard = [
   ["✅ Sí, continuar"],
-  ["✏️ Corregir información"],
+  ["⚽ Editar modalidades"],
+  ["✏️ Corregir otros datos"],
   ["❌ Empezar de nuevo"],
 ];
 
@@ -73,6 +82,14 @@ const complexFlows = new Set<ComplexFlowName>([
   "event_creation_detected_confirmation",
   "event_creation_copy",
   "guided_program_capacity",
+  "guided_program_edit_select",
+  "guided_program_edit_menu",
+  "guided_program_edit_name",
+  "guided_program_edit_turn",
+  "guided_program_edit_schedule",
+  "guided_program_edit_ages",
+  "guided_program_edit_capacity",
+  "guided_program_delete_confirmation",
   "guided_period_selection",
   "guided_full_event_discount",
   "guided_full_event_discount_value",
@@ -135,6 +152,13 @@ export function shouldUseComplexFlow(collected: Record<string, unknown>) {
     advanced.periods.length > 1 ||
     advanced.prices.length > 1
   );
+}
+
+export function requiresDashboardPublication(
+  collected: Record<string, unknown>,
+) {
+  const advanced = getAdvancedDraft(collected);
+  return advanced.programs.length > 2 || advanced.periods.length > 2;
 }
 
 interface InterpretedPrice {
@@ -315,7 +339,9 @@ export function detectedEventSummary(collected: Record<string, unknown>) {
             program.min_age != null && program.max_age != null
               ? ` · ${program.min_age}-${program.max_age} años`
               : "";
-          return `• ${program.name} · ${turnName(program.turn)}${schedule}${ages}`;
+          const capacity =
+            program.capacity != null ? ` · ${program.capacity} plazas` : "";
+          return `• ${program.name} · ${turnName(program.turn)}${schedule}${ages}${capacity}`;
         })
         .join("\n")
     : "• No detectados";
@@ -345,6 +371,68 @@ PRECIOS
 • ${advanced.prices.length ? `${advanced.prices.length} tarifas detectadas; te las mostraré para confirmarlas.` : "No detectados todavía."}
 
 ¿La información principal es correcta?`;
+}
+
+function programEditor(
+  collected: Record<string, unknown>,
+  prefix = "",
+): ComplexFlowResult {
+  const programs = getAdvancedDraft(collected).programs;
+  return {
+    flow: "guided_program_edit_select",
+    collected: {
+      ...collected,
+      telegram_edit_program_index: undefined,
+      telegram_program_editor_mode: undefined,
+    },
+    message: `${prefix}${prefix ? "\n\n" : ""}${
+      programs.length
+        ? "Selecciona la modalidad que quieres corregir:"
+        : "No hay modalidades configuradas."
+    }`,
+    keyboard: [
+      ...programs.map((program, index) => [
+        `${index + 1}. ${program.name}`.slice(0, 60),
+      ]),
+      ["➕ Añadir modalidad"],
+      ["✅ Terminar edición"],
+      ["Cancelar"],
+    ],
+  };
+}
+
+function editingProgram(
+  collected: Record<string, unknown>,
+): AdvancedEventDraft["programs"][number] | undefined {
+  const index = Number(collected.telegram_edit_program_index);
+  return getAdvancedDraft(collected).programs[index];
+}
+
+function updateEditingProgram(
+  collected: Record<string, unknown>,
+  changes: Partial<AdvancedEventDraft["programs"][number]>,
+  confirmation: string,
+) {
+  const advanced = getAdvancedDraft(collected);
+  const index = Number(collected.telegram_edit_program_index);
+  if (!Number.isInteger(index) || !advanced.programs[index])
+    return programEditor(collected, "No encontré esa modalidad.");
+  const previous = advanced.programs[index];
+  const programs = advanced.programs.map((program, position) =>
+    position === index ? { ...program, ...changes } : program,
+  );
+  const prices = changes.name
+    ? advanced.prices.map((price) =>
+        normalizeTelegramChoice(price.program_name) ===
+        normalizeTelegramChoice(previous.name)
+          ? { ...price, program_name: changes.name! }
+          : price,
+      )
+    : advanced.prices;
+  return programEditor(
+    { ...collected, advanced: { ...advanced, programs, prices } },
+    confirmation,
+  );
 }
 
 export function registrationFormPreview(template: RegistrationTemplateKey) {
@@ -410,6 +498,41 @@ const menu = (collected: Record<string, unknown>, prefix = "") => ({
   keyboard: complexMenuKeyboard,
 });
 
+function finalReview(
+  collected: Record<string, unknown>,
+  prefix = "",
+): ComplexFlowResult {
+  const advanced = getAdvancedDraft(collected);
+  const dashboardRequired = requiresDashboardPublication(collected);
+  const complexityReasons = [
+    advanced.programs.length > 2
+      ? `${advanced.programs.length} modalidades`
+      : null,
+    advanced.periods.length > 2 ? `${advanced.periods.length} periodos` : null,
+  ].filter((reason): reason is string => Boolean(reason));
+  return {
+    flow: "guided_final_review",
+    collected,
+    message: `${prefix}${prefix ? "\n\n" : ""}${complexSummary(collected)}
+
+Todo está preparado. Los avisos a participantes se enviarán únicamente por correo.
+
+${
+  dashboardRequired
+    ? `Este evento es complejo porque tiene ${complexityReasons.join(" y ")}. Para evitar errores, debes comprobarlo y publicarlo desde el dashboard.`
+    : "El evento es simple y puedes publicarlo ahora desde Telegram o revisarlo primero en el dashboard."
+}`,
+    keyboard: dashboardRequired
+      ? [["👀 Guardar y revisar dashboard"], ["Cancelar"]]
+      : [
+          ["🚀 Publicar"],
+          ["💾 Guardar borrador"],
+          ["👀 Revisar dashboard"],
+          ["Cancelar"],
+        ],
+  };
+}
+
 export function handleComplexFlowStep(
   flow: ComplexFlowName,
   text: string,
@@ -419,6 +542,11 @@ export function handleComplexFlowStep(
   const advanced = getAdvancedDraft(collected);
   const scratch = (collected.telegram_program ?? {}) as Record<string, unknown>;
   if (choice === "menu" || choice === "volver") return menu(collected);
+  if (
+    choice === "volver a modalidades" &&
+    flow.startsWith("guided_program_edit")
+  )
+    return programEditor(collected);
 
   if (flow === "event_creation_method") {
     if (choice.includes("describir el evento"))
@@ -435,11 +563,12 @@ export function handleComplexFlowStep(
         collected: {
           ...collected,
           guided_creation: true,
+          telegram_image_queue: [],
           telegram_attachment_count: 0,
         },
         message:
-          "Envíame los carteles uno a uno como imágenes. Iré incorporando la información de cada imagen. Cuando termines, pulsa “Analizar información”.",
-        keyboard: [["🔎 Analizar información"], ["Cancelar"]],
+          "Puedes enviar varias imágenes seguidas. Procura que sean nítidas, estén bien iluminadas y muestren todo el texto sin recortes ni reflejos para minimizar errores. Las guardaré sin interrumpirte y, cuando hayas terminado, pulsa “Analizar imágenes”.",
+        keyboard: [["🔎 Analizar imágenes"], ["Cancelar"]],
       };
     if (choice.includes("copiar evento anterior"))
       return {
@@ -465,7 +594,10 @@ export function handleComplexFlowStep(
     };
 
   if (flow === "event_creation_images") {
-    if (choice.includes("analizar informacion"))
+    if (
+      choice.includes("analizar imagenes") ||
+      choice.includes("analizar informacion")
+    )
       return Number(collected.telegram_attachment_count ?? 0) > 0
         ? {
             flow: "event_creation_detected_confirmation",
@@ -477,15 +609,15 @@ export function handleComplexFlowStep(
             flow,
             collected,
             message:
-              "Aún no recibí ninguna imagen. Envíame un cartel y después pulsa “Analizar información”.",
-            keyboard: [["🔎 Analizar información"], ["Cancelar"]],
+              "Aún no recibí ninguna imagen. Envíame uno o varios carteles y después pulsa “Analizar imágenes”.",
+            keyboard: [["🔎 Analizar imágenes"], ["Cancelar"]],
           };
     return {
       flow,
       collected,
       message:
-        "Envíame otra imagen o pulsa “Analizar información” cuando hayas terminado.",
-      keyboard: [["🔎 Analizar información"], ["Cancelar"]],
+        "Envíame otra imagen o pulsa “Analizar imágenes” cuando hayas terminado.",
+      keyboard: [["🔎 Analizar imágenes"], ["Cancelar"]],
     };
   }
 
@@ -507,12 +639,17 @@ export function handleComplexFlowStep(
             telegram_pending_prices: advanced.prices,
             advanced: { ...advanced, prices: [] },
           },
-          message: `He interpretado estas tarifas:\n\n${pricingPreview(advanced.prices)}\n\n¿Son correctas?`,
+          message: `He interpretado estas tarifas:\n\n${pricingPreview(advanced.prices, advanced.periods)}\n\n¿Son correctas?`,
           keyboard: [["✅ Correcto", "✏️ Editar precios"], ["Cancelar"]],
         };
       return nextGuidedConfiguration(collected);
     }
-    if (choice.includes("corregir informacion"))
+    if (choice.includes("editar modalidades"))
+      return programEditor(collected);
+    if (
+      choice.includes("corregir otros datos") ||
+      choice.includes("corregir informacion")
+    )
       return {
         flow: "event_creation_description",
         collected,
@@ -536,6 +673,252 @@ export function handleComplexFlowStep(
       collected,
       message: detectedEventSummary(collected),
       keyboard: detectedEventKeyboard,
+    };
+  }
+
+  if (flow === "guided_program_edit_select") {
+    if (choice.includes("anadir modalidad"))
+      return {
+        flow: "complex_program_name",
+        collected: {
+          ...collected,
+          telegram_program: undefined,
+          telegram_program_editor_mode: true,
+        },
+        message: "¿Cómo se llama la nueva modalidad?",
+        keyboard: [["Cancelar"]],
+      };
+    if (choice.includes("terminar edicion"))
+      return {
+        flow: "event_creation_detected_confirmation",
+        collected: {
+          ...collected,
+          telegram_edit_program_index: undefined,
+          telegram_program_editor_mode: undefined,
+        },
+        message: detectedEventSummary(collected),
+        keyboard: detectedEventKeyboard,
+      };
+    const selected = Number(choice.match(/^(\d+)\./)?.[1]) - 1;
+    if (
+      !Number.isInteger(selected) ||
+      selected < 0 ||
+      selected >= advanced.programs.length
+    )
+      return programEditor(collected, "No reconocí esa modalidad.");
+    const program = advanced.programs[selected];
+    return {
+      flow: "guided_program_edit_menu",
+      collected: { ...collected, telegram_edit_program_index: selected },
+      message: `Editando “${program.name}”:
+
+• Turno: ${turnName(program.turn)}
+• Horario: ${program.start_time && program.end_time ? `${program.start_time}-${program.end_time}` : "Sin definir"}
+• Edades: ${program.min_age != null && program.max_age != null ? `${program.min_age}-${program.max_age} años` : "Sin definir"}
+• Plazas: ${program.capacity ?? "Sin definir"}
+
+¿Qué quieres corregir?`,
+      keyboard: [
+        ["Nombre", "Turno"],
+        ["Horario", "Edades"],
+        ["Plazas"],
+        ["🗑️ Eliminar modalidad"],
+        ["Volver a modalidades"],
+        ["Cancelar"],
+      ],
+    };
+  }
+
+  if (flow === "guided_program_edit_menu") {
+    if (choice === "nombre")
+      return {
+        flow: "guided_program_edit_name",
+        collected,
+        message: "Escribe el nombre correcto de la modalidad.",
+      };
+    if (choice === "turno")
+      return {
+        flow: "guided_program_edit_turn",
+        collected,
+        message: "Selecciona el turno correcto.",
+        keyboard: [
+          ["Mañana", "Tarde"],
+          ["Todo el día", "Personalizado"],
+          ["Volver a modalidades"],
+          ["Cancelar"],
+        ],
+      };
+    if (choice === "horario")
+      return {
+        flow: "guided_program_edit_schedule",
+        collected,
+        message:
+          "Indica el horario, por ejemplo “de 9:00 a 14:00”, o elige Sin horario.",
+        keyboard: [["Sin horario"], ["Volver a modalidades"], ["Cancelar"]],
+      };
+    if (choice === "edades")
+      return {
+        flow: "guided_program_edit_ages",
+        collected,
+        message:
+          "Indica las edades, por ejemplo “de 6 a 16 años”, o elige Todas las edades.",
+        keyboard: [["Todas las edades"], ["Volver a modalidades"], ["Cancelar"]],
+      };
+    if (choice === "plazas")
+      return {
+        flow: "guided_program_edit_capacity",
+        collected,
+        message: "¿Cuántas plazas tendrá esta modalidad?",
+      };
+    if (choice.includes("eliminar modalidad")) {
+      const program = editingProgram(collected);
+      return {
+        flow: "guided_program_delete_confirmation",
+        collected,
+        message: `¿Confirmas que quieres eliminar “${program?.name ?? "esta modalidad"}”?`,
+        keyboard: [["Sí, eliminar"], ["No, conservar"], ["Cancelar"]],
+      };
+    }
+    if (choice.includes("volver a modalidades")) return programEditor(collected);
+    return {
+      flow,
+      collected,
+      message: "Elige qué dato de la modalidad quieres corregir.",
+      keyboard: [
+        ["Nombre", "Turno"],
+        ["Horario", "Edades"],
+        ["Plazas"],
+        ["🗑️ Eliminar modalidad"],
+        ["Volver a modalidades"],
+        ["Cancelar"],
+      ],
+    };
+  }
+
+  if (flow === "guided_program_edit_name") {
+    const name = text.trim();
+    if (name.length < 2 || name.length > 120)
+      return {
+        flow,
+        collected,
+        message: "Escribe un nombre de entre 2 y 120 caracteres.",
+      };
+    return updateEditingProgram(
+      collected,
+      { name },
+      `Nombre actualizado a “${name}”.`,
+    );
+  }
+
+  if (flow === "guided_program_edit_turn") {
+    const turns: Record<
+      string,
+      AdvancedEventDraft["programs"][number]["turn"]
+    > = {
+      manana: "morning",
+      tarde: "afternoon",
+      "todo el dia": "full_day",
+      personalizado: "custom",
+    };
+    const turn = turns[choice];
+    if (!turn)
+      return {
+        flow,
+        collected,
+        message: "Elige Mañana, Tarde, Todo el día o Personalizado.",
+      };
+    return updateEditingProgram(
+      collected,
+      { turn },
+      `Turno actualizado a ${turnName(turn)}.`,
+    );
+  }
+
+  if (flow === "guided_program_edit_schedule") {
+    if (choice === "sin horario")
+      return updateEditingProgram(
+        collected,
+        { start_time: null, end_time: null },
+        "Horario eliminado.",
+      );
+    const schedule = parseTimeRange(text);
+    if (!schedule)
+      return {
+        flow,
+        collected,
+        message:
+          "Indica un horario válido, por ejemplo “de 9:00 a 14:00”, o elige Sin horario.",
+      };
+    return updateEditingProgram(
+      collected,
+      schedule,
+      `Horario actualizado a ${schedule.start_time}-${schedule.end_time}.`,
+    );
+  }
+
+  if (flow === "guided_program_edit_ages") {
+    if (choice === "todas las edades")
+      return updateEditingProgram(
+        collected,
+        { min_age: null, max_age: null },
+        "Eliminé la restricción de edad.",
+      );
+    const ages = parseAgeRange(text);
+    if (!ages)
+      return {
+        flow,
+        collected,
+        message:
+          "Indica un rango válido, por ejemplo “de 6 a 16 años”, o elige Todas las edades.",
+      };
+    return updateEditingProgram(
+      collected,
+      ages,
+      `Edades actualizadas: ${ages.min_age}-${ages.max_age} años.`,
+    );
+  }
+
+  if (flow === "guided_program_edit_capacity") {
+    const capacity = Number(text.trim());
+    if (!Number.isInteger(capacity) || capacity < 1 || capacity > 100000)
+      return {
+        flow,
+        collected,
+        message: "Indica un número de plazas entre 1 y 100000.",
+      };
+    return updateEditingProgram(
+      collected,
+      { capacity },
+      `Plazas actualizadas a ${capacity}.`,
+    );
+  }
+
+  if (flow === "guided_program_delete_confirmation") {
+    if (choice === "si, eliminar") {
+      const index = Number(collected.telegram_edit_program_index);
+      const removed = advanced.programs[index];
+      const programs = advanced.programs.filter(
+        (_, position) => position !== index,
+      );
+      const prices = removed
+        ? advanced.prices.filter(
+            (price) =>
+              normalizeTelegramChoice(price.program_name) !==
+              normalizeTelegramChoice(removed.name),
+          )
+        : advanced.prices;
+      return programEditor(
+        { ...collected, advanced: { ...advanced, programs, prices } },
+        "Modalidad eliminada.",
+      );
+    }
+    if (choice === "no, conservar")
+      return programEditor(collected, "No hice ningún cambio.");
+    return {
+      flow,
+      collected,
+      message: "Confirma si quieres eliminar la modalidad.",
+      keyboard: [["Sí, eliminar"], ["No, conservar"], ["Cancelar"]],
     };
   }
 
@@ -641,29 +1024,12 @@ export function handleComplexFlowStep(
 
   if (flow === "guided_form_review") {
     if (choice.includes("esta bien") || choice.includes("está bien"))
-      return {
-        flow: "guided_final_review",
-        collected,
-        message: `${complexSummary(collected)}
-
-Todo está preparado. Los avisos a participantes se enviarán únicamente por correo.
-
-¿Qué quieres hacer ahora?`,
-        keyboard: [
-          ["🚀 Publicar"],
-          ["💾 Guardar borrador"],
-          ["👀 Revisar dashboard"],
-          ["Cancelar"],
-        ],
-      };
+      return finalReview(collected);
     if (choice.includes("modificar"))
-      return {
-        flow: "guided_final_review",
-        collected: { ...collected, telegram_review_form: true },
-        message:
-          "Guardaré el evento como borrador para que personalices el formulario en el dashboard.",
-        keyboard: [["👀 Revisar dashboard"], ["💾 Guardar borrador"], ["Cancelar"]],
-      };
+      return finalReview(
+        { ...collected, telegram_review_form: true },
+        "Guardaré el evento como borrador para que personalices el formulario en el dashboard.",
+      );
     return {
       flow,
       collected,
@@ -673,6 +1039,12 @@ Todo está preparado. Los avisos a participantes se enviarán únicamente por co
   }
 
   if (flow === "guided_final_review") {
+    const dashboardRequired = requiresDashboardPublication(collected);
+    if (choice.includes("publicar") && dashboardRequired)
+      return finalReview(
+        collected,
+        "Por seguridad, los eventos complejos no se pueden publicar desde Telegram.",
+      );
     if (choice.includes("publicar"))
       return {
         flow: "awaiting_confirmation",
@@ -681,7 +1053,11 @@ Todo está preparado. Los avisos a participantes se enviarán únicamente por co
         message: `${complexSummary(collected)}\n\n¿Confirmas que quieres publicarlo ahora?`,
         keyboard: [["Confirmar publicación"], ["Cancelar"]],
       };
-    if (choice.includes("guardar borrador") || choice.includes("revisar dashboard"))
+    if (
+      choice.includes("guardar borrador") ||
+      choice.includes("revisar dashboard") ||
+      choice.includes("guardar y revisar dashboard")
+    )
       return {
         flow: "awaiting_confirmation",
         collected: {
@@ -693,17 +1069,7 @@ Todo está preparado. Los avisos a participantes se enviarán únicamente por co
         message: `${complexSummary(collected)}\n\nGuardaré el evento como borrador y te daré el enlace del dashboard. ¿Confirmas?`,
         keyboard: [["Confirmar borrador"], ["Cancelar"]],
       };
-    return {
-      flow,
-      collected,
-      message: "Elige Publicar, Guardar borrador o Revisar dashboard.",
-      keyboard: [
-        ["🚀 Publicar"],
-        ["💾 Guardar borrador"],
-        ["👀 Revisar dashboard"],
-        ["Cancelar"],
-      ],
-    };
+    return finalReview(collected);
   }
 
   if (flow === "complex_menu") {
@@ -888,8 +1254,10 @@ Todo está preparado. Los avisos a participantes se enviarán únicamente por co
       telegram_program: undefined,
       advanced: { ...advanced, programs: [...programs, program] },
     };
-    return collected.guided_creation
-      ? nextGuidedConfiguration(next)
+    return collected.telegram_program_editor_mode
+      ? programEditor(next, `Modalidad “${program.name}” añadida.`)
+      : collected.guided_creation
+        ? nextGuidedConfiguration(next)
       : {
           flow: "complex_menu",
           collected: next,
@@ -1193,7 +1561,52 @@ Todo está preparado. Los avisos a participantes se enviarán únicamente por co
   };
 }
 
-export function pricingPreview(prices: AdvancedEventDraft["prices"]) {
+const spanishMonths = [
+  "enero",
+  "febrero",
+  "marzo",
+  "abril",
+  "mayo",
+  "junio",
+  "julio",
+  "agosto",
+  "septiembre",
+  "octubre",
+  "noviembre",
+  "diciembre",
+];
+
+export function formatPeriodDateRange(
+  period: AdvancedEventDraft["periods"][number],
+) {
+  const parse = (value: string) => {
+    const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return match
+      ? { year: Number(match[1]), month: Number(match[2]), day: Number(match[3]) }
+      : null;
+  };
+  const start = parse(period.start_date);
+  const end = parse(period.end_date);
+  if (
+    !start ||
+    !end ||
+    start.month < 1 ||
+    start.month > 12 ||
+    end.month < 1 ||
+    end.month > 12
+  )
+    return null;
+  if (start.year === end.year && start.month === end.month)
+    return `Periodo del ${start.day} al ${end.day} de ${spanishMonths[start.month - 1]}`;
+  if (start.year === end.year)
+    return `Periodo del ${start.day} de ${spanishMonths[start.month - 1]} al ${end.day} de ${spanishMonths[end.month - 1]}`;
+  return `Periodo del ${start.day} de ${spanishMonths[start.month - 1]} de ${start.year} al ${end.day} de ${spanishMonths[end.month - 1]} de ${end.year}`;
+}
+
+export function pricingPreview(
+  prices: AdvancedEventDraft["prices"],
+  periods: AdvancedEventDraft["periods"] = [],
+) {
   return prices
     .map((price) => {
       const audience =
@@ -1202,7 +1615,78 @@ export function pricingPreview(prices: AdvancedEventDraft["prices"]) {
           : price.audience === "non_member"
             ? "No socio"
             : "General";
-      return `• ${price.program_name} · ${price.label} · ${audience}: ${price.amount} €`;
+      const period = periods.find((candidate) => {
+        const candidateLabel = normalizeTelegramChoice(candidate.label);
+        return price.period_label
+          ? candidateLabel === normalizeTelegramChoice(price.period_label)
+          : normalizeTelegramChoice(price.label).includes(candidateLabel);
+      });
+      const dateRange = period ? formatPeriodDateRange(period) : null;
+      return `• ${price.program_name} · ${price.label}${dateRange ? ` · ${dateRange}` : ""} · ${audience}: ${price.amount} €`;
     })
     .join("\n");
+}
+
+export function eventCompletionMessage({
+  collected,
+  eventId,
+  slug,
+  appUrl,
+  savedAsDraft,
+  dashboardPublicationRequired,
+}: {
+  collected: Record<string, unknown>;
+  eventId: string;
+  slug: string;
+  appUrl: string;
+  savedAsDraft: boolean;
+  dashboardPublicationRequired: boolean;
+}) {
+  const baseUrl = appUrl.replace(/\/$/, "");
+  const dashboardUrl = `${baseUrl}/dashboard/events/${eventId}`;
+  const registrationUrl = `${baseUrl}/events/${slug}/register`;
+  const title = String(collected.title ?? "Tu evento");
+
+  if (savedAsDraft)
+    return {
+      message: dashboardPublicationRequired
+        ? `✅ El evento “${title}” quedó preparado como borrador.
+
+Como es un evento complejo, el siguiente paso es comprobar modalidades, periodos, tarifas y formulario en el dashboard. La publicación se realiza desde allí para evitar errores.
+
+👉 Revisar y publicar:
+${dashboardUrl}
+
+Cuando esté publicado podrás compartir el enlace de inscripción con los participantes.
+
+¿Qué quieres hacer ahora?`
+        : `💾 Guardé “${title}” como borrador.
+
+Puedes completar la revisión y publicarlo cuando quieras desde el dashboard:
+${dashboardUrl}
+
+¿Qué quieres hacer ahora?`,
+      keyboard: [
+        ["Ver dashboard"],
+        ["Crear otro evento", "Mis eventos"],
+      ],
+    };
+
+  return {
+    message: `🎉 ¡Evento publicado correctamente!
+
+“${title}” ya está disponible para recibir inscripciones.
+
+📊 Gestionar evento:
+${dashboardUrl}
+
+🔗 Enlace para participantes:
+${registrationUrl}
+
+¿Qué quieres hacer ahora?`,
+    keyboard: [
+      ["Crear otro evento"],
+      ["Mis eventos", "Ver dashboard"],
+    ],
+  };
 }

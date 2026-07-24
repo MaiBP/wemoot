@@ -34,6 +34,14 @@ export interface TelegramAttachment {
   kind: "image";
 }
 
+export interface TelegramImageReference {
+  fileId: string;
+  fileSize?: number;
+  mimeType: string;
+  fileName: string;
+  caption?: string;
+}
+
 export async function sendTelegramMessage(
   chatId: string,
   text: string,
@@ -73,11 +81,9 @@ export type TelegramKeyboardButton =
   | string
   | { text: string; request_contact?: boolean; request_location?: boolean };
 
-export async function getTelegramAttachment(
+export function getTelegramImageReference(
   message: TelegramMessage,
-): Promise<TelegramAttachment | undefined> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  if (!token) throw new Error("TELEGRAM_BOT_TOKEN no está configurado");
+): TelegramImageReference | undefined {
   const photo = message.photo?.at(-1);
   const document = message.document?.mime_type?.startsWith("image/")
     ? message.document
@@ -87,9 +93,23 @@ export async function getTelegramAttachment(
   if ((file.file_size ?? 0) > 10 * 1024 * 1024) {
     throw new Error("La imagen supera el límite de 10 MB");
   }
+  return {
+    fileId: file.file_id,
+    fileSize: file.file_size,
+    mimeType: document?.mime_type || "image/jpeg",
+    fileName: document?.file_name ?? "cartel.jpg",
+    caption: message.caption?.trim().slice(0, 1000),
+  };
+}
+
+export async function downloadTelegramImage(
+  reference: TelegramImageReference,
+): Promise<TelegramAttachment> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) throw new Error("TELEGRAM_BOT_TOKEN no está configurado");
 
   const metadataResponse = await fetch(
-    `https://api.telegram.org/bot${token}/getFile?file_id=${encodeURIComponent(file.file_id)}`,
+    `https://api.telegram.org/bot${token}/getFile?file_id=${encodeURIComponent(reference.fileId)}`,
   );
   const metadata = (await metadataResponse.json()) as {
     ok: boolean;
@@ -105,16 +125,22 @@ export async function getTelegramAttachment(
   if (!fileResponse.ok) {
     throw new Error("No se pudo descargar la imagen de Telegram");
   }
-  const mimeType = document?.mime_type || "image/jpeg";
   const bytes = Buffer.from(await fileResponse.arrayBuffer()).toString(
     "base64",
   );
   return {
-    dataUrl: `data:${mimeType};base64,${bytes}`,
-    filename: document?.file_name ?? "cartel.jpg",
-    mimeType,
+    dataUrl: `data:${reference.mimeType};base64,${bytes}`,
+    filename: reference.fileName,
+    mimeType: reference.mimeType,
     kind: "image",
   };
+}
+
+export async function getTelegramAttachment(
+  message: TelegramMessage,
+): Promise<TelegramAttachment | undefined> {
+  const reference = getTelegramImageReference(message);
+  return reference ? downloadTelegramImage(reference) : undefined;
 }
 
 export async function getTelegramImageDataUrl(message: TelegramMessage) {

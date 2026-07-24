@@ -12,8 +12,10 @@ import {
   eventSchema,
 } from "@/lib/validations";
 import {
-  getTelegramAttachment,
+  downloadTelegramImage,
+  getTelegramImageReference,
   sendTelegramMessage,
+  type TelegramImageReference,
   type TelegramUpdate,
 } from "@/lib/telegram";
 import type { AdvancedEventDraft } from "@/types/event";
@@ -22,11 +24,14 @@ import {
   complexSummary,
   detectedEventKeyboard,
   detectedEventSummary,
+  eventCompletionMessage,
   eventCreationMethodKeyboard,
   getAdvancedDraft,
   handleComplexFlowStep,
   isComplexFlowName,
+  normalizeTelegramChoice,
   pricingPreview,
+  requiresDashboardPublication,
   shouldUseComplexFlow,
 } from "@/lib/telegram/complex-event-flow";
 import { createOrUpdateProfile } from "@/lib/onboarding/create-or-update-profile";
@@ -566,7 +571,7 @@ export async function POST(request: Request) {
     .slice(0, 4000);
   const admin = createAdminClient();
   try {
-    const attachment = await getTelegramAttachment(message);
+    const imageReference = getTelegramImageReference(message);
     const { data: account } = await admin
       .from("telegram_accounts")
       .select("*, profiles(*)")
@@ -673,7 +678,9 @@ export async function POST(request: Request) {
       });
       return NextResponse.json({ ok: true });
     }
-    if (/^(crear( mi primer)? evento|crear campus)$/i.test(text)) {
+    if (
+      /^(crear( mi primer| otro)? evento|crear campus)$/i.test(text)
+    ) {
       const collected = {
         ...buildEventDefaults(onboardingStatus),
         event_mode: "advanced",
@@ -849,46 +856,101 @@ export async function POST(request: Request) {
       const existing = state.collected_data as Record<string, unknown>;
       if (
         state.current_flow === "event_creation_images" &&
-        attachment
+        imageReference
       ) {
-        await sendTelegramMessage(
-          chatId,
-          "🖼️ Estoy analizando la imagen…",
-        );
-        const imported = await parseEventMessage(
-          message.caption ?? "Incorpora la información de este archivo",
-          existing,
-          attachment,
-        );
-        const importedData: Record<string, unknown> = {
-          ...existing,
-          ...Object.fromEntries(
-            Object.entries(imported.event).filter(
-              ([, value]) => value !== null && value !== undefined,
-            ),
-          ),
-          social_copy: imported.social_copy || existing.social_copy,
-          whatsapp_message:
-            imported.whatsapp_message || existing.whatsapp_message,
-          event_mode: "advanced",
-          advanced: imported.advanced ?? existing.advanced,
-          telegram_attachment_count:
-            Number(existing.telegram_attachment_count ?? 0) + 1,
-        };
+        const queued = Array.isArray(existing.telegram_image_queue)
+          ? (existing.telegram_image_queue as TelegramImageReference[])
+          : [];
+        if (queued.length >= 12) {
+          await sendTelegramMessage(
+            chatId,
+            "Puedes cargar un máximo de 12 imágenes por evento. Pulsa “Analizar imágenes” para continuar.",
+            [["🔎 Analizar imágenes"], ["Cancelar"]],
+          );
+          return NextResponse.json({ ok: true });
+        }
+        const nextQueue = [...queued, imageReference];
         await admin
           .from("conversation_states")
           .update({
             current_flow: "event_creation_images",
+            collected_data: {
+              ...existing,
+              telegram_image_queue: nextQueue,
+              telegram_attachment_count: nextQueue.length,
+            },
+            missing_fields: [],
+            last_message: text,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("telegram_chat_id", chatId);
+        return NextResponse.json({ ok: true });
+      }
+      if (
+        state.current_flow === "event_creation_images" &&
+        ["analizar imagenes", "analizar informacion"].includes(
+          normalizeTelegramChoice(text),
+        )
+      ) {
+        const queued = Array.isArray(existing.telegram_image_queue)
+          ? (existing.telegram_image_queue as TelegramImageReference[])
+          : [];
+        if (!queued.length) {
+          await sendTelegramMessage(
+            chatId,
+            "Aún no recibí ninguna imagen. Carga uno o varios carteles y después pulsa “Analizar imágenes”.",
+            [["🔎 Analizar imágenes"], ["Cancelar"]],
+          );
+          return NextResponse.json({ ok: true });
+        }
+        await sendTelegramMessage(
+          chatId,
+          `⏳ Estoy analizando las ${queued.length} imágenes cargadas. Puede tardar un momento…`,
+        );
+        const importedData: Record<string, unknown> = { ...existing };
+        delete importedData.telegram_image_queue;
+        delete importedData.telegram_attachment_count;
+        let missingFields: string[] = [];
+        for (const [index, reference] of queued.entries()) {
+          const attachment = await downloadTelegramImage(reference);
+          const imported = await parseEventMessage(
+            reference.caption ??
+              `Incorpora la información de la imagen ${index + 1} de ${queued.length}.`,
+            importedData,
+            attachment,
+          );
+          Object.assign(
+            importedData,
+            Object.fromEntries(
+              Object.entries(imported.event).filter(
+                ([, value]) => value !== null && value !== undefined,
+              ),
+            ),
+            {
+              social_copy:
+                imported.social_copy || importedData.social_copy,
+              whatsapp_message:
+                imported.whatsapp_message || importedData.whatsapp_message,
+              event_mode: "advanced",
+              advanced: imported.advanced ?? importedData.advanced,
+            },
+          );
+          missingFields = imported.missing_fields;
+        }
+        await admin
+          .from("conversation_states")
+          .update({
+            current_flow: "event_creation_detected_confirmation",
             collected_data: importedData,
-            missing_fields: imported.missing_fields,
+            missing_fields: missingFields,
             last_message: text,
             updated_at: new Date().toISOString(),
           })
           .eq("telegram_chat_id", chatId);
         await sendTelegramMessage(
           chatId,
-          `✅ Archivo incorporado. Ya llevo ${String(importedData.telegram_attachment_count)}. Puedes enviar otro o pulsar “Analizar información”.`,
-          [["🔎 Analizar información"], ["Cancelar"]],
+          detectedEventSummary(importedData),
+          detectedEventKeyboard,
         );
         return NextResponse.json({ ok: true });
       }
@@ -1140,7 +1202,7 @@ export async function POST(request: Request) {
             .eq("telegram_chat_id", chatId);
           await sendTelegramMessage(
             chatId,
-            `He interpretado estas tarifas:\n\n${pricingPreview(interpreted.prices).slice(0, 3500)}${interpreted.uncertainties.length ? `\n\n⚠️ Revisa:\n${interpreted.uncertainties.join("\n").slice(0, 350)}` : ""}`,
+            `He interpretado estas tarifas:\n\n${pricingPreview(interpreted.prices, advanced.periods).slice(0, 3500)}${interpreted.uncertainties.length ? `\n\n⚠️ Revisa:\n${interpreted.uncertainties.join("\n").slice(0, 350)}` : ""}`,
             existing.guided_creation
               ? [["✅ Correcto", "✏️ Editar precios"], ["Cancelar"]]
               : [["Confirmar precios", "Editar precios"], ["Menú"]],
@@ -1157,6 +1219,9 @@ export async function POST(request: Request) {
         result.action === "import" ||
         result.action === "import_guided"
       ) {
+        const attachment = imageReference
+          ? await downloadTelegramImage(imageReference)
+          : undefined;
         const imported = await parseEventMessage(text, existing, attachment);
         const importedData: Record<string, unknown> = {
           ...existing,
@@ -1247,7 +1312,10 @@ export async function POST(request: Request) {
         (total, program) => total + (program.capacity ?? 0),
         0,
       );
+      const dashboardPublicationRequired =
+        requiresDashboardPublication(collectedData);
       const saveOnly =
+        dashboardPublicationRequired ||
         collectedData.telegram_save_mode === "draft" ||
         /^(guardar borrador|confirmar borrador)$/i.test(text);
       const { data: organization } = await admin
@@ -1352,11 +1420,18 @@ export async function POST(request: Request) {
           last_message: text,
         })
         .eq("telegram_chat_id", chatId);
+      const completion = eventCompletionMessage({
+        collected: collectedData,
+        eventId: event.id,
+        slug: event.slug,
+        appUrl: process.env.NEXT_PUBLIC_APP_URL ?? "https://wemoot.com",
+        savedAsDraft: saveOnly,
+        dashboardPublicationRequired,
+      });
       await sendTelegramMessage(
         chatId,
-        saveOnly
-          ? `✅ Borrador guardado.\n\n${complexSummary(collectedData)}\n\nRevísalo antes de publicar:\n${process.env.NEXT_PUBLIC_APP_URL}/dashboard/events/${event.id}`
-          : `✅ Evento publicado.\n\nGestionar evento:\n${process.env.NEXT_PUBLIC_APP_URL}/dashboard/events/${event.id}\n\nEnlace de inscripción para participantes:\n${process.env.NEXT_PUBLIC_APP_URL}/events/${event.slug}/register`,
+        completion.message,
+        completion.keyboard,
       );
       return NextResponse.json({ ok: true });
     }
@@ -1368,6 +1443,9 @@ export async function POST(request: Request) {
             ...(state.collected_data as Record<string, unknown>),
           }
         : buildEventDefaults(onboardingStatus);
+    const attachment = imageReference
+      ? await downloadTelegramImage(imageReference)
+      : undefined;
     const parsed = await parseEventMessage(text, existing, attachment);
     if (parsed.intent === "unknown") {
       await sendTelegramMessage(

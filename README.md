@@ -70,9 +70,15 @@ Stripe Checkout caduca a los 30 minutos, que es el mínimo admitido por Stripe. 
 
 Ejecuta `supabase/migrations/007_telegram_complex_flow_phase5.sql` después de la migración 006. Esta migración registra el último `update_id` procesado para que los reintentos de Telegram no dupliquen pasos ni estructuras.
 
-El comando `crear evento` abre un asistente guiado. El club puede describir el evento, enviar varios carteles como imágenes o reutilizar un evento anterior. El bot presenta primero un resumen estructurado, solicita confirmación de las tarifas y pregunta únicamente la configuración que falta: plazas, combinación de modalidades, inscripción directa o preinscripción, límite de solicitudes, plazo de pago y plantilla del formulario. Las invitaciones a participantes se envían exclusivamente por correo. Al finalizar se puede publicar directamente, guardar un borrador o guardar y abrir el dashboard.
+El comando `crear evento` abre un asistente guiado. El club puede describir el evento, enviar varios carteles como imágenes o reutilizar un evento anterior. El bot presenta primero un resumen estructurado y permite corregir las modalidades detectadas: nombre, turno, horario, edades y plazas, además de añadirlas o eliminarlas. Después solicita confirmación de las tarifas y pregunta únicamente la configuración que falta: combinación de modalidades, inscripción directa o preinscripción, límite de solicitudes, plazo de pago y plantilla del formulario. Las invitaciones a participantes se envían exclusivamente por correo.
 
-Las imágenes admiten un máximo de 10 MB. Las tarifas detectadas nunca se guardan sin una confirmación explícita.
+Las imágenes admiten un máximo de 10 MB y se pueden cargar en un lote de hasta 12. Deben ser nítidas, estar bien iluminadas y mostrar todo el texto sin recortes ni reflejos. El bot no interrumpe cada carga: comienza a procesarlas juntas cuando el usuario pulsa `Analizar imágenes` y muestra un único aviso mientras trabaja. Las tarifas detectadas nunca se guardan sin una confirmación explícita.
+
+Cuando una tarifa está vinculada a una semana o periodo detectado, la confirmación muestra también sus fechas en lenguaje natural, por ejemplo `Periodo del 22 al 26 de junio`.
+
+Para la publicación desde Telegram, un evento es simple cuando tiene como máximo dos modalidades y dos periodos. Si supera cualquiera de esos límites se considera complejo: Telegram sólo guarda el borrador y entrega el enlace del dashboard, donde el organizador debe comprobarlo y publicarlo. Esta restricción se valida nuevamente en el webhook aunque se envíe manualmente un comando de publicación.
+
+Al terminar, Telegram confirma claramente si el evento quedó publicado o guardado como borrador. El mensaje incluye los enlaces correspondientes y ofrece botones para crear otro evento, consultar los eventos existentes o abrir el dashboard.
 
 ### Fase 6: privacidad, equipos y comunicaciones
 
