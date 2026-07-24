@@ -177,6 +177,7 @@ export async function POST(request: Request) {
             periodIds: selection.period_ids,
             participantType: input.participant_type,
             discountCode: input.discount_code ?? undefined,
+            selectedRuleId: selection.price_rule_id,
           },
           admin,
         ),

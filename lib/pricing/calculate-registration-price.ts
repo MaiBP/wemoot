@@ -14,6 +14,7 @@ export interface CalculatePriceInput {
   selectedExtras?: string[];
   /** Enlace temporal con event_prices mientras el formulario antiguo siga activo. */
   legacyPriceId?: string;
+  selectedRuleId?: string;
 }
 
 export async function calculateRegistrationPrice(
@@ -88,6 +89,7 @@ export async function calculateRegistrationPrice(
     participantType: input.participantType,
     discountCode: input.discountCode,
     legacyPriceId: input.legacyPriceId,
+    selectedRuleId: input.selectedRuleId,
     totalAvailablePeriods: availableRelations.count ?? 0,
     rules: rulesResult.data ?? [],
     discounts: discountsResult.data ?? [],

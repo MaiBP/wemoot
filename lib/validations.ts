@@ -350,6 +350,7 @@ export const dynamicRegistrationSchema = z.object({
       z.object({
         program_id: z.uuid(),
         period_ids: z.array(z.uuid()).min(1).max(52),
+        price_rule_id: z.uuid().optional(),
       }),
     )
     .min(1)

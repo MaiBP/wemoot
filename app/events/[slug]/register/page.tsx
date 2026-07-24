@@ -7,6 +7,7 @@ import { DynamicRegistrationForm } from "@/components/forms/DynamicRegistrationF
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type {
   EventIncludedItem,
+  EventPriceRule,
   EventProgramPeriod,
   RegistrationFormField,
   RegistrationFormRecord,
@@ -89,6 +90,7 @@ export default async function RegistrationPage({
     { data: programPeriods = [] },
     { data: includedItems = [] },
     { data: activeReservations = [] },
+    { data: priceRules = [] },
   ] = registrationForm
     ? await Promise.all([
         admin
@@ -117,8 +119,21 @@ export default async function RegistrationPage({
           .eq("event_id", event.id)
           .eq("status", "reserved")
           .gt("expires_at", new Date().toISOString()),
+        admin
+          .from("event_price_rules")
+          .select("*")
+          .eq("event_id", event.id)
+          .eq("is_active", true)
+          .order("priority", { ascending: false }),
       ])
-    : [{ data: [] }, { data: [] }, { data: [] }, { data: [] }, { data: [] }];
+    : [
+        { data: [] },
+        { data: [] },
+        { data: [] },
+        { data: [] },
+        { data: [] },
+        { data: [] },
+      ];
   const liveProgramPeriods = (programPeriods ?? []).map((relation) => ({
     ...relation,
     capacity:
@@ -252,6 +267,7 @@ export default async function RegistrationPage({
                   programs={programs ?? []}
                   periods={periods ?? []}
                   relations={liveProgramPeriods as EventProgramPeriod[]}
+                  priceRules={(priceRules ?? []) as EventPriceRule[]}
                   includedItems={(includedItems ?? []) as EventIncludedItem[]}
                   registrationMode={
                     preregistration ? "preregistration" : "direct"

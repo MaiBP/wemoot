@@ -1,3 +1,5 @@
+import { getSelectablePriceScope } from "./package-options.ts";
+
 export interface PriceRuleInput {
   id: string;
   program_id: string | null;
@@ -13,6 +15,7 @@ export interface PriceRuleInput {
   quantity_from: number | null;
   quantity_to: number | null;
   amount: number | string;
+  label?: string | null;
   currency: string;
   priority: number;
   starts_at: string | null;
@@ -45,6 +48,7 @@ export interface CalculateConfiguredPriceInput {
   participantType: string;
   discountCode?: string;
   legacyPriceId?: string;
+  selectedRuleId?: string;
   totalAvailablePeriods: number;
   rules: PriceRuleInput[];
   discounts: DiscountInput[];
@@ -108,6 +112,8 @@ function ruleMatches(
   now: Date,
 ) {
   if (!rule.is_active || rule.pricing_type === "manual") return false;
+  if (input.selectedRuleId != null && rule.id !== input.selectedRuleId)
+    return false;
   if (rule.program_id != null && rule.program_id !== input.programId)
     return false;
   if (
@@ -115,12 +121,31 @@ function ruleMatches(
     rule.participant_type !== input.participantType
   )
     return false;
-  if (rule.quantity_from != null && quantity < rule.quantity_from) return false;
-  if (rule.quantity_to != null && quantity > rule.quantity_to) return false;
+  const selectedScope =
+    input.selectedRuleId === rule.id ? getSelectablePriceScope(rule) : null;
+  if (
+    selectedScope == null &&
+    rule.quantity_from != null &&
+    quantity < rule.quantity_from
+  )
+    return false;
+  if (
+    selectedScope == null &&
+    rule.quantity_to != null &&
+    quantity > rule.quantity_to
+  )
+    return false;
   if (rule.period_id != null && !input.periodIds.includes(rule.period_id))
     return false;
   if (rule.period_id != null && quantity !== 1) return false;
   if (
+    selectedScope === "full_event" &&
+    (input.totalAvailablePeriods === 0 ||
+      quantity !== input.totalAvailablePeriods)
+  )
+    return false;
+  if (
+    selectedScope == null &&
     rule.pricing_type === "full_event" &&
     (input.totalAvailablePeriods === 0 ||
       quantity !== input.totalAvailablePeriods)
@@ -208,8 +233,12 @@ export function calculateConfiguredPrice(
   }
 
   const unitAmount = eurosToCents(rule.amount);
+  const selectedScope =
+    input.selectedRuleId === rule.id ? getSelectablePriceScope(rule) : null;
   const baseAmount =
-    rule.pricing_type === "per_period" ? unitAmount * quantity : unitAmount;
+    rule.pricing_type === "per_period" || selectedScope === "per_week"
+      ? unitAmount * quantity
+      : unitAmount;
   const matchingDiscounts = input.discounts
     .filter((item) => discountMatches(item, input, quantity, now))
     .sort((a, b) => b.priority - a.priority);

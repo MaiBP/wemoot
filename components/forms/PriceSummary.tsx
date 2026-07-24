@@ -40,7 +40,7 @@ export function PriceSummary({
           </div>
         </>
       ) : (
-        <p>Selecciona modalidad y semanas para calcular el total.</p>
+        <p>Selecciona modalidad, tarifa y periodos para calcular el total.</p>
       )}
     </div>
   );

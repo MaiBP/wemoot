@@ -7,6 +7,10 @@ import {
   type PriceRuleInput,
 } from "../lib/pricing/calculate-price.ts";
 import { inferRulePeriodIds } from "../lib/pricing/infer-rule-periods.ts";
+import {
+  getSelectablePriceRules,
+  getSelectablePriceScope,
+} from "../lib/pricing/package-options.ts";
 import type { EventPeriod, EventPriceRule } from "../types/event.ts";
 
 const rules: PriceRuleInput[] = [
@@ -87,6 +91,85 @@ test("infiere semanas sólo cuando reglas y periodos coinciden exactamente", () 
 
   const incomplete = inferRulePeriodIds(priceRules.slice(0, 2), periods);
   assert.equal(incomplete.size, 0);
+});
+
+test("un pack semanal por sesiones se aplica a las semanas elegidas", () => {
+  const pack = {
+    ...rule(
+      "pack-2-sesiones",
+      "non_member",
+      "period_bundle",
+      2,
+      2,
+      "40.00",
+      100,
+    ),
+    label: "Pack Semana (2 sesiones)",
+  };
+  const result = calculateConfiguredPrice({
+    programId: "program-1",
+    participantType: "non_member",
+    periodIds: ["week-1", "week-2"],
+    totalAvailablePeriods: 6,
+    rules: [pack],
+    discounts: [],
+    selectedRuleId: pack.id,
+  });
+  assert.equal(getSelectablePriceScope(pack), "per_week");
+  assert.equal(result.finalAmount, 8_000);
+});
+
+test("un bono completo por sesiones exige todos los periodos", () => {
+  const full = {
+    ...rule(
+      "bono-completo-2",
+      "non_member",
+      "period_bundle",
+      12,
+      12,
+      "190.00",
+      100,
+    ),
+    label: "Bono Completo (6 semanas 2 sesiones semanales)",
+  };
+  const result = calculateConfiguredPrice({
+    programId: "program-1",
+    participantType: "non_member",
+    periodIds: ["1", "2", "3", "4", "5", "6"],
+    totalAvailablePeriods: 6,
+    rules: [full],
+    discounts: [],
+    selectedRuleId: full.id,
+  });
+  assert.equal(getSelectablePriceScope(full), "full_event");
+  assert.equal(result.finalAmount, 19_000);
+});
+
+test("sólo muestra los packs del tipo de participante elegido", () => {
+  const priceRules = [
+    {
+      ...rule("club", "member", "full_event", 6, 6, "350.00", 100),
+      event_id: "event-1",
+      label: "Campus completo Club",
+      description: null,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    },
+    {
+      ...rule("no-club", "non_member", "full_event", 6, 6, "400.00", 100),
+      event_id: "event-1",
+      label: "Campus completo No Club",
+      description: null,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    },
+  ] as EventPriceRule[];
+  assert.deepEqual(
+    getSelectablePriceRules(priceRules, "program-1", "member").map(
+      (item) => item.id,
+    ),
+    ["club"],
+  );
 });
 
 function discount(overrides: Partial<DiscountInput> = {}): DiscountInput {

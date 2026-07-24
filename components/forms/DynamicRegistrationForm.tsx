@@ -1,9 +1,10 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import type {
   EventIncludedItem,
   EventPeriod,
+  EventPriceRule,
   EventProgram,
   EventProgramPeriod,
   RegistrationFormField,
@@ -34,7 +35,11 @@ type Calculation = {
     };
   }>;
 };
-type Selection = { programId: string; periodIds: string[] };
+type Selection = {
+  programId: string;
+  periodIds: string[];
+  priceRuleId?: string;
+};
 const optionValue = (option: string | { label: string; value: string }) =>
   typeof option === "string" ? option : option.value;
 const optionLabel = (option: string | { label: string; value: string }) =>
@@ -48,6 +53,7 @@ export function DynamicRegistrationForm({
   programs,
   periods,
   relations,
+  priceRules,
   includedItems,
   registrationMode,
   allowMultiplePrograms,
@@ -60,6 +66,7 @@ export function DynamicRegistrationForm({
   programs: EventProgram[];
   periods: EventPeriod[];
   relations: EventProgramPeriod[];
+  priceRules: EventPriceRule[];
   includedItems: EventIncludedItem[];
   registrationMode: "direct" | "preregistration";
   allowMultiplePrograms: boolean;
@@ -77,6 +84,7 @@ export function DynamicRegistrationForm({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [hydrated, setHydrated] = useState(false);
+  const allowNavigation = useRef(false);
   const storageKey = `wemoot-form-${form.id}`;
   const activeSections = useMemo(
     () =>
@@ -134,7 +142,8 @@ export function DynamicRegistrationForm({
   }, [answers, selections, participantType, step, storageKey, hydrated]);
   useEffect(() => {
     const listener = (event: BeforeUnloadEvent) => {
-      if (Object.keys(answers).length) event.preventDefault();
+      if (!allowNavigation.current && Object.keys(answers).length)
+        event.preventDefault();
     };
     window.addEventListener("beforeunload", listener);
     return () => window.removeEventListener("beforeunload", listener);
@@ -156,7 +165,11 @@ export function DynamicRegistrationForm({
         signal: controller.signal,
         body: JSON.stringify({
           eventId,
-          selections,
+          selections: selections.map((selection) => ({
+            programId: selection.programId,
+            periodIds: selection.periodIds,
+            priceRuleId: selection.priceRuleId,
+          })),
           participantType,
           discountCode: discountCode || undefined,
         }),
@@ -201,7 +214,7 @@ export function DynamicRegistrationForm({
         !calculation)
     )
       return setError(
-        "Selecciona modalidad y al menos una semana con precio disponible.",
+        "Selecciona una modalidad, una tarifa disponible y al menos un periodo.",
       );
     const missing = currentFields.find(
       (field) =>
@@ -229,6 +242,7 @@ export function DynamicRegistrationForm({
           selections: selections.map((selection) => ({
             program_id: selection.programId,
             period_ids: selection.periodIds,
+            price_rule_id: selection.priceRuleId,
           })),
           participant_type: participantType,
           discount_code: discountCode || null,
@@ -240,6 +254,7 @@ export function DynamicRegistrationForm({
       const result = await response.json();
       if (!response.ok) throw new Error(result.error);
       localStorage.removeItem(storageKey);
+      allowNavigation.current = true;
       window.location.assign(result.checkout_url || result.success_url);
     } catch (cause) {
       setError(
@@ -380,7 +395,16 @@ export function DynamicRegistrationForm({
                   <Label>Tipo de participante</Label>
                   <select
                     value={participantType}
-                    onChange={(event) => setParticipantType(event.target.value)}
+                    onChange={(event) => {
+                      setParticipantType(event.target.value);
+                      setSelections((current) =>
+                        current.map((selection) => ({
+                          ...selection,
+                          priceRuleId: undefined,
+                        })),
+                      );
+                      setCalculation(null);
+                    }}
                     className="h-11 w-full rounded-xl border bg-white px-3"
                   >
                     <option value="member">Socio</option>
@@ -404,8 +428,11 @@ export function DynamicRegistrationForm({
                     <PeriodSelector
                       periods={periods}
                       relations={relations}
+                      priceRules={priceRules}
+                      participantType={participantType}
                       programId={selection.programId}
                       values={selection.periodIds}
+                      selectedPriceRuleId={selection.priceRuleId}
                       showCapacity={registrationMode === "direct"}
                       allowIndividualPeriods={allowIndividualPeriods}
                       onChange={(values) => {
@@ -413,6 +440,16 @@ export function DynamicRegistrationForm({
                           current.map((item) =>
                             item.programId === selection.programId
                               ? { ...item, periodIds: values }
+                              : item,
+                          ),
+                        );
+                        setCalculation(null);
+                      }}
+                      onPriceRuleChange={(priceRuleId) => {
+                        setSelections((current) =>
+                          current.map((item) =>
+                            item.programId === selection.programId
+                              ? { ...item, priceRuleId }
                               : item,
                           ),
                         );

@@ -11,6 +11,7 @@ const schema = z.object({
       z.object({
         programId: z.uuid(),
         periodIds: z.array(z.uuid()).min(1).max(52),
+        priceRuleId: z.uuid().optional(),
       }),
     )
     .min(1)
@@ -48,6 +49,7 @@ export async function POST(request: Request) {
             periodIds: selection.periodIds,
             participantType: parsed.data.participantType,
             discountCode: parsed.data.discountCode,
+            selectedRuleId: selection.priceRuleId,
           },
           admin,
         ),
