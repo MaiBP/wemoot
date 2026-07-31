@@ -1,12 +1,18 @@
 import type { AdvancedEventDraft } from "@/types/event";
 import type { RegistrationTemplateKey } from "@/lib/forms/create-registration-template";
+import {
+  generatePeriods,
+  type PeriodUnit,
+} from "../events/generate-periods.ts";
 import { formatPeriodDateRange } from "../period-format.ts";
 
 export type ComplexFlowName =
+  | "event_creation_type"
   | "event_creation_method"
   | "event_creation_description"
   | "event_creation_images"
   | "event_creation_detected_confirmation"
+  | "basic_event_review"
   | "event_creation_copy"
   | "guided_program_capacity"
   | "guided_program_edit_select"
@@ -17,6 +23,7 @@ export type ComplexFlowName =
   | "guided_program_edit_ages"
   | "guided_program_edit_capacity"
   | "guided_program_delete_confirmation"
+  | "guided_period_type"
   | "guided_period_selection"
   | "guided_full_event_discount"
   | "guided_full_event_discount_value"
@@ -62,6 +69,12 @@ export const eventCreationMethodKeyboard = [
   ["Cancelar"],
 ];
 
+export const eventCreationTypeKeyboard = [
+  ["Evento básico", "Evento avanzado"],
+  ["No estoy seguro"],
+  ["Cancelar"],
+];
+
 export const detectedEventKeyboard = [
   ["✅ Sí, continuar"],
   ["⚽ Editar modalidades"],
@@ -70,7 +83,7 @@ export const detectedEventKeyboard = [
 ];
 
 export const complexMenuKeyboard = [
-  ["Crear programas", "Crear semanas"],
+  ["Crear programas", "Configurar periodos"],
   ["Configurar precios", "Configurar inscripciones"],
   ["Elegir formulario", "Importar información"],
   ["Ver resumen"],
@@ -78,10 +91,12 @@ export const complexMenuKeyboard = [
 ];
 
 const complexFlows = new Set<ComplexFlowName>([
+  "event_creation_type",
   "event_creation_method",
   "event_creation_description",
   "event_creation_images",
   "event_creation_detected_confirmation",
+  "basic_event_review",
   "event_creation_copy",
   "guided_program_capacity",
   "guided_program_edit_select",
@@ -92,6 +107,7 @@ const complexFlows = new Set<ComplexFlowName>([
   "guided_program_edit_ages",
   "guided_program_edit_capacity",
   "guided_program_delete_confirmation",
+  "guided_period_type",
   "guided_period_selection",
   "guided_full_event_discount",
   "guided_full_event_discount_value",
@@ -159,8 +175,7 @@ export function shouldUseComplexFlow(collected: Record<string, unknown>) {
 export function requiresDashboardPublication(
   collected: Record<string, unknown>,
 ) {
-  const advanced = getAdvancedDraft(collected);
-  return advanced.programs.length > 2 || advanced.periods.length > 2;
+  return shouldUseComplexFlow(collected);
 }
 
 interface InterpretedPrice {
@@ -215,39 +230,40 @@ export function expandInterpretedPrices(
   return { prices: expanded, uncertainties };
 }
 
-const iso = (date: Date) => date.toISOString().slice(0, 10);
-const addDays = (date: Date, days: number) => {
-  const next = new Date(date);
-  next.setUTCDate(next.getUTCDate() + days);
-  return next;
-};
-
 export function generateWeeklyPeriods(startDate: string, endDate: string) {
-  const start = new Date(`${startDate}T00:00:00Z`);
-  const end = new Date(`${endDate}T00:00:00Z`);
-  if (
-    Number.isNaN(start.getTime()) ||
-    Number.isNaN(end.getTime()) ||
-    end < start
-  )
-    return [];
-  const periods: AdvancedEventDraft["periods"] = [];
-  let cursor = start;
-  while (cursor <= end && periods.length < 52) {
-    const weekday = cursor.getUTCDay();
-    const daysToEnd =
-      weekday >= 1 && weekday <= 5 ? 5 - weekday : weekday === 6 ? 1 : 0;
-    const periodEnd = new Date(
-      Math.min(addDays(cursor, daysToEnd).getTime(), end.getTime()),
-    );
-    periods.push({
-      label: `Semana ${periods.length + 1}`,
-      start_date: iso(cursor),
-      end_date: iso(periodEnd),
-    });
-    cursor = addDays(periodEnd, periodEnd.getUTCDay() === 5 ? 3 : 1);
-  }
-  return periods;
+  return generatePeriods("period_weekly", startDate, endDate, 5);
+}
+
+function configuredPeriods(
+  unit: PeriodUnit,
+  collected: Record<string, unknown>,
+  weeklyDays = 5,
+) {
+  return generatePeriods(
+    unit,
+    String(collected.start_date ?? ""),
+    String(collected.end_date ?? ""),
+    weeklyDays,
+  );
+}
+
+function periodConfiguration(choice: string): {
+  unit: PeriodUnit;
+  weeklyDays: number;
+  label: string;
+} | null {
+  if (choice === "dias individuales")
+    return { unit: "daily", weeklyDays: 7, label: "días individuales" };
+  if (choice === "meses")
+    return { unit: "monthly", weeklyDays: 7, label: "bloques mensuales" };
+  const weeklyDays = Number(choice.match(/semanas de ([567]) dias/)?.[1]);
+  return weeklyDays
+    ? {
+        unit: "period_weekly",
+        weeklyDays,
+        label: `semanas de ${weeklyDays} días`,
+      }
+    : null;
 }
 
 export function parseTimeRange(value: string) {
@@ -354,12 +370,21 @@ export function complexSummary(collected: Record<string, unknown>) {
     collected.registration_mode === "preregistration"
       ? `Preinscripción · máximo ${String(collected.preregistration_limit ?? "sin definir")} · ${String(collected.payment_invitation_hours ?? 24)} h para pagar`
       : "Inscripción y pago directo";
-  return `Resumen del campus:\n\n• ${String(collected.title ?? "Sin nombre")}\n• Programas: ${advanced.programs.length} (${multiplePrograms})\n• Semanas: ${advanced.periods.length}\n• Reglas de precio: ${advanced.prices.length}\n• Inscripciones: ${registration}\n• Formulario: ${templateName}`;
+  const periodConfigurationName =
+    collected.telegram_period_unit === "daily"
+      ? "días individuales"
+      : collected.telegram_period_unit === "monthly"
+        ? "meses"
+        : collected.telegram_period_unit === "period_weekly"
+          ? `semanas de ${String(collected.telegram_weekly_days ?? 5)} días`
+          : "periodos importados o manuales";
+  const periods = collected.telegram_periods_pending_dashboard
+    ? "Pendientes de configurar en dashboard"
+    : `${advanced.periods.length} (${periodConfigurationName})`;
+  return `Resumen del evento avanzado:\n\n• ${String(collected.title ?? "Sin nombre")}\n• Modalidades: ${advanced.programs.length} (${multiplePrograms})\n• Periodos: ${periods}\n• Reglas de precio: ${advanced.prices.length}\n• Inscripciones: ${registration}\n• Formulario: ${templateName}`;
 }
 
-const turnName = (
-  turn: AdvancedEventDraft["programs"][number]["turn"],
-) =>
+const turnName = (turn: AdvancedEventDraft["programs"][number]["turn"]) =>
   turn === "morning"
     ? "Mañana"
     : turn === "afternoon"
@@ -413,6 +438,19 @@ PRECIOS
 • ${advanced.prices.length ? `${advanced.prices.length} tarifas detectadas; te las mostraré para confirmarlas.` : "No detectados todavía."}
 
 ¿La información principal es correcta?`;
+}
+
+export function basicEventSummary(collected: Record<string, unknown>) {
+  return `He organizado el evento básico:
+
+• ${String(collected.title ?? "Nombre pendiente")}
+• ${String(collected.event_type ?? "Tipo pendiente")}
+• ${String(collected.start_date ?? "Fecha pendiente")} al ${String(collected.end_date ?? "Fecha pendiente")}
+• ${String(collected.city ?? "Ciudad pendiente")}${collected.location ? ` · ${String(collected.location)}` : ""}
+${collected.schedule ? `• Horario: ${String(collected.schedule)}\n` : ""}${collected.age_range ? `• Edades o categorías: ${String(collected.age_range)}\n` : ""}• Precio final: €${String(collected.price ?? "pendiente")}
+• Plazas: ${String(collected.capacity ?? "pendiente")}
+
+Un evento básico tiene una única actividad, un precio final y un aforo general.`;
 }
 
 function programEditor(
@@ -498,35 +536,38 @@ export function registrationFormPreview(template: RegistrationTemplateKey) {
 function nextGuidedConfiguration(
   collected: Record<string, unknown>,
 ): ComplexFlowResult {
-  let advanced = getAdvancedDraft(collected);
-  let nextCollected = collected;
-  if (!advanced.periods.length) {
-    const periods = generateWeeklyPeriods(
-      String(collected.start_date ?? ""),
-      String(collected.end_date ?? ""),
-    );
-    if (periods.length) {
-      advanced = { ...advanced, periods };
-      nextCollected = { ...collected, advanced };
-    }
-  }
+  const advanced = getAdvancedDraft(collected);
   if (!advanced.programs.length)
     return {
       flow: "complex_program_name",
-      collected: nextCollected,
+      collected,
       message:
         "No detecté ninguna modalidad. ¿Cómo se llama la primera? Por ejemplo: Tecnificación de mañana.",
     };
   if (advanced.programs.some((program) => !program.capacity))
     return {
       flow: "guided_program_capacity",
-      collected: nextCollected,
+      collected,
       message:
         "¿Cuántas plazas tendrá cada modalidad? Si todas tienen el mismo aforo, responde solo con un número. También puedes escribir, por ejemplo: “Mañana 40, Tarde 30”.",
     };
+  if (!advanced.periods.length)
+    return {
+      flow: "guided_period_type",
+      collected,
+      message:
+        "¿Cómo quieres dividir las fechas de este evento? Esta será una configuración inicial; en el dashboard podrás definir una periodicidad distinta para cada modalidad.",
+      keyboard: [
+        ["Semanas de 5 días", "Semanas de 6 días"],
+        ["Semanas de 7 días"],
+        ["Días individuales", "Meses"],
+        ["Configurar en dashboard"],
+        ["Cancelar"],
+      ],
+    };
   return {
     flow: "complex_program_selection_mode",
-    collected: nextCollected,
+    collected,
     message:
       "¿Cada participante puede elegir una sola modalidad o combinar varias, por ejemplo mañana y tarde?",
     keyboard: [["Una modalidad", "Varias modalidades"], ["Cancelar"]],
@@ -552,6 +593,9 @@ function finalReview(
       : null,
     advanced.periods.length > 2 ? `${advanced.periods.length} periodos` : null,
   ].filter((reason): reason is string => Boolean(reason));
+  const complexityDescription = complexityReasons.length
+    ? complexityReasons.join(" y ")
+    : "una estructura avanzada";
   return {
     flow: "guided_final_review",
     collected,
@@ -561,7 +605,7 @@ Todo está preparado. Los avisos a participantes se enviarán únicamente por co
 
 ${
   dashboardRequired
-    ? `Este evento es complejo porque tiene ${complexityReasons.join(" y ")}. Para evitar errores, debes comprobarlo y publicarlo desde el dashboard.`
+    ? `Este evento requiere revisión porque tiene ${complexityDescription}. Para evitar errores, debes comprobarlo y publicarlo desde el dashboard.`
     : "El evento es simple y puedes publicarlo ahora desde Telegram o revisarlo primero en el dashboard."
 }`,
     keyboard: dashboardRequired
@@ -590,16 +634,55 @@ export function handleComplexFlowStep(
   )
     return programEditor(collected);
 
+  if (flow === "event_creation_type") {
+    const requestedMode = choice.includes("evento avanzado")
+      ? "advanced"
+      : choice.includes("evento basico")
+        ? "simple"
+        : choice.includes("no estoy seguro")
+          ? "auto"
+          : null;
+    if (!requestedMode)
+      return {
+        flow,
+        collected,
+        message:
+          "Elige Evento básico, Evento avanzado o No estoy seguro para que pueda orientarte.",
+        keyboard: eventCreationTypeKeyboard,
+      };
+    return {
+      flow: "event_creation_method",
+      collected: {
+        ...collected,
+        telegram_event_type: requestedMode,
+        ...(requestedMode === "auto" ? {} : { event_mode: requestedMode }),
+        advanced: { programs: [], periods: [], prices: [], uncertainties: [] },
+      },
+      message:
+        requestedMode === "simple"
+          ? "Perfecto. Un evento básico tendrá una actividad, un precio final y un aforo general. ¿Cómo quieres facilitarme la información?"
+          : requestedMode === "advanced"
+            ? "Perfecto. Prepararemos la estructura inicial y la publicación se completará desde el dashboard. ¿Cómo quieres facilitarme la información?"
+            : "Analizaré la información y te diré si corresponde a un evento básico o avanzado. ¿Cómo quieres facilitármela?",
+      keyboard: eventCreationMethodKeyboard,
+    };
+  }
+
   if (flow === "event_creation_method") {
     if (choice.includes("describir el evento"))
       return {
         flow: "event_creation_description",
         collected: { ...collected, guided_creation: true },
         message:
-          "Descríbeme el evento en un solo mensaje. Incluye todo lo que sepas: nombre, lugar, fechas, modalidades, horarios, edades, semanas y precios.",
+          collected.telegram_event_type === "simple"
+            ? "Descríbeme el evento en un solo mensaje. Incluye nombre, tipo, lugar, fechas, horario, edades o categorías, precio final y número total de plazas."
+            : "Descríbeme el evento en un solo mensaje. Incluye todo lo que sepas: nombre, lugar, fechas, modalidades, horarios, edades, periodos, sesiones y precios.",
         keyboard: [["Cancelar"]],
       };
-    if (choice.includes("enviar imagenes") || choice.includes("enviar imágenes"))
+    if (
+      choice.includes("enviar imagenes") ||
+      choice.includes("enviar imágenes")
+    )
       return {
         flow: "event_creation_images",
         collected: {
@@ -686,8 +769,7 @@ export function handleComplexFlowStep(
         };
       return nextGuidedConfiguration(collected);
     }
-    if (choice.includes("editar modalidades"))
-      return programEditor(collected);
+    if (choice.includes("editar modalidades")) return programEditor(collected);
     if (
       choice.includes("corregir otros datos") ||
       choice.includes("corregir informacion")
@@ -701,20 +783,52 @@ export function handleComplexFlowStep(
       };
     if (choice.includes("empezar de nuevo"))
       return {
-        flow: "event_creation_method",
-        collected: {
-          event_mode: "advanced",
-          guided_creation: true,
-          advanced: { programs: [], periods: [], prices: [], uncertainties: [] },
-        },
-        message: "Empecemos de nuevo. ¿Cómo quieres crear el evento?",
-        keyboard: eventCreationMethodKeyboard,
+        flow: "event_creation_type",
+        collected: {},
+        message: "Empecemos de nuevo. ¿Qué tipo de evento quieres crear?",
+        keyboard: eventCreationTypeKeyboard,
       };
     return {
       flow,
       collected,
       message: detectedEventSummary(collected),
       keyboard: detectedEventKeyboard,
+    };
+  }
+
+  if (flow === "basic_event_review") {
+    if (choice.includes("publicar"))
+      return {
+        flow: "awaiting_confirmation",
+        collected: { ...collected, telegram_save_mode: "publish" },
+        action: "prepare_save",
+        message: `${basicEventSummary(collected)}\n\n¿Confirmas que quieres publicarlo ahora?`,
+        keyboard: [["Confirmar publicación"], ["Cancelar"]],
+      };
+    if (choice.includes("guardar borrador"))
+      return {
+        flow: "awaiting_confirmation",
+        collected: { ...collected, telegram_save_mode: "draft" },
+        action: "save_draft",
+        message: "Estoy guardando el evento como borrador.",
+      };
+    if (choice.includes("corregir"))
+      return {
+        flow: "event_creation_description",
+        collected,
+        message:
+          "Indícame en un solo mensaje qué debo corregir o añadir. Conservaré el resto de la información.",
+        keyboard: [["Cancelar"]],
+      };
+    return {
+      flow,
+      collected,
+      message: `${basicEventSummary(collected)}\n\n¿Qué quieres hacer?`,
+      keyboard: [
+        ["🚀 Publicar", "💾 Guardar borrador"],
+        ["✏️ Corregir datos"],
+        ["Cancelar"],
+      ],
     };
   }
 
@@ -804,7 +918,11 @@ export function handleComplexFlowStep(
         collected,
         message:
           "Indica las edades, por ejemplo “de 6 a 16 años”, o elige Todas las edades.",
-        keyboard: [["Todas las edades"], ["Volver a modalidades"], ["Cancelar"]],
+        keyboard: [
+          ["Todas las edades"],
+          ["Volver a modalidades"],
+          ["Cancelar"],
+        ],
       };
     if (choice === "plazas")
       return {
@@ -821,7 +939,8 @@ export function handleComplexFlowStep(
         keyboard: [["Sí, eliminar"], ["No, conservar"], ["Cancelar"]],
       };
     }
-    if (choice.includes("volver a modalidades")) return programEditor(collected);
+    if (choice.includes("volver a modalidades"))
+      return programEditor(collected);
     return {
       flow,
       collected,
@@ -987,6 +1106,61 @@ export function handleComplexFlowStep(
     });
   }
 
+  if (flow === "guided_period_type") {
+    if (choice === "configurar en dashboard")
+      return {
+        flow: "complex_program_selection_mode",
+        collected: {
+          ...collected,
+          telegram_period_unit: undefined,
+          telegram_weekly_days: undefined,
+          telegram_periods_pending_dashboard: true,
+        },
+        message:
+          "Dejaré los periodos pendientes para el dashboard. ¿Cada participante podrá elegir una sola modalidad o combinar varias?",
+        keyboard: [["Una modalidad", "Varias modalidades"], ["Cancelar"]],
+      };
+    const configuration = periodConfiguration(choice);
+    if (!configuration)
+      return {
+        flow,
+        collected,
+        message: "Elige cómo quieres dividir las fechas del evento.",
+        keyboard: [
+          ["Semanas de 5 días", "Semanas de 6 días"],
+          ["Semanas de 7 días"],
+          ["Días individuales", "Meses"],
+          ["Configurar en dashboard"],
+          ["Cancelar"],
+        ],
+      };
+    const periods = configuredPeriods(
+      configuration.unit,
+      collected,
+      configuration.weeklyDays,
+    );
+    if (!periods.length || periods.length > 52)
+      return {
+        flow,
+        collected,
+        message:
+          "No pude generar entre 1 y 52 periodos con esas fechas. Revísalas o elige Configurar en dashboard.",
+        keyboard: [["Configurar en dashboard"], ["Cancelar"]],
+      };
+    return {
+      flow: "complex_program_selection_mode",
+      collected: {
+        ...collected,
+        telegram_period_unit: configuration.unit,
+        telegram_weekly_days: configuration.weeklyDays,
+        telegram_periods_pending_dashboard: false,
+        advanced: { ...advanced, periods },
+      },
+      message: `He creado ${periods.length} periodos como ${configuration.label}.\n\n¿Cada participante podrá elegir una sola modalidad o combinar varias?`,
+      keyboard: [["Una modalidad", "Varias modalidades"], ["Cancelar"]],
+    };
+  }
+
   if (flow === "guided_period_selection") {
     const selectable =
       choice === "si, cada semana" || choice === "sí, cada semana"
@@ -1041,7 +1215,9 @@ export function handleComplexFlowStep(
   }
 
   if (flow === "guided_full_event_discount_value") {
-    const percentage = Number(text.match(/\d+(?:[.,]\d+)?/)?.[0].replace(",", "."));
+    const percentage = Number(
+      text.match(/\d+(?:[.,]\d+)?/)?.[0].replace(",", "."),
+    );
     if (!Number.isFinite(percentage) || percentage <= 0 || percentage > 100)
       return {
         flow,
@@ -1054,8 +1230,7 @@ export function handleComplexFlowStep(
         ...collected,
         full_event_discount_percentage: percentage,
       },
-      message:
-        `Aplicaré un ${percentage}% al seleccionar todas las semanas.\n\n¿Cómo quieres gestionar las inscripciones?`,
+      message: `Aplicaré un ${percentage}% al seleccionar todas las semanas.\n\n¿Cómo quieres gestionar las inscripciones?`,
       keyboard: [
         ["Inscripción directa"],
         ["Preinscripción y lista de espera"],
@@ -1120,14 +1295,16 @@ export function handleComplexFlowStep(
         collected,
         message: "¿Cómo se llama la modalidad o programa?",
       };
-    if (choice === "crear semanas")
+    if (choice === "crear semanas" || choice === "configurar periodos")
       return {
         flow: "complex_period_mode",
         collected,
-        message: "¿Quieres dividir automáticamente las fechas del evento?",
+        message: "¿Cómo quieres dividir las fechas del evento?",
         keyboard: [
-          ["Crear semanas automáticamente"],
-          ["Introducir fechas"],
+          ["Semanas de 5 días", "Semanas de 6 días"],
+          ["Semanas de 7 días"],
+          ["Días individuales", "Meses"],
+          ["Introducir periodo manual"],
           ["Menú"],
         ],
       };
@@ -1298,31 +1475,38 @@ export function handleComplexFlowStep(
       ? programEditor(next, `Modalidad “${program.name}” añadida.`)
       : collected.guided_creation
         ? nextGuidedConfiguration(next)
-      : {
-          flow: "complex_menu",
-          collected: next,
-          message: `Programa “${program.name}” añadido.`,
-          keyboard: [["Añadir programa", "Crear semanas"], ["Menú"]],
-        };
+        : {
+            flow: "complex_menu",
+            collected: next,
+            message: `Programa “${program.name}” añadido.`,
+            keyboard: [["Añadir programa", "Configurar periodos"], ["Menú"]],
+          };
   }
 
   if (flow === "complex_period_mode") {
-    if (choice === "crear semanas automaticamente") {
-      const periods = generateWeeklyPeriods(
-        String(collected.start_date ?? ""),
-        String(collected.end_date ?? ""),
+    const configuration = periodConfiguration(choice);
+    if (configuration) {
+      const periods = configuredPeriods(
+        configuration.unit,
+        collected,
+        configuration.weeklyDays,
       );
-      if (!periods.length)
+      if (!periods.length || periods.length > 52)
         return menu(
           collected,
-          "No pude dividir esas fechas; introdúcelas manualmente.",
+          "No pude generar entre 1 y 52 periodos con esas fechas; introdúcelos manualmente.",
         );
       return menu(
-        { ...collected, advanced: { ...advanced, periods } },
-        `He creado ${periods.length} semanas automáticamente.`,
+        {
+          ...collected,
+          telegram_period_unit: configuration.unit,
+          telegram_weekly_days: configuration.weeklyDays,
+          advanced: { ...advanced, periods },
+        },
+        `He creado ${periods.length} periodos como ${configuration.label}.`,
       );
     }
-    if (choice === "introducir fechas")
+    if (choice === "introducir periodo manual")
       return {
         flow: "complex_period_label",
         collected,
@@ -1331,7 +1515,14 @@ export function handleComplexFlowStep(
     return {
       flow,
       collected,
-      message: "Elige creación automática o Introducir fechas.",
+      message: "Elige una división automática o Introducir periodo manual.",
+      keyboard: [
+        ["Semanas de 5 días", "Semanas de 6 días"],
+        ["Semanas de 7 días"],
+        ["Días individuales", "Meses"],
+        ["Introducir periodo manual"],
+        ["Menú"],
+      ],
     };
   }
 
@@ -1374,7 +1565,7 @@ export function handleComplexFlowStep(
       flow: "complex_menu",
       collected: next,
       message: `Periodo “${label}” añadido.`,
-      keyboard: [["Crear semanas", "Configurar precios"], ["Menú"]],
+      keyboard: [["Configurar periodos", "Configurar precios"], ["Menú"]],
     };
   }
 
@@ -1450,7 +1641,11 @@ export function handleComplexFlowStep(
         message: `${registrationFormPreview(template)}
 
 ¿Quieres utilizarlo así?`,
-        keyboard: [["✅ Está bien"], ["✏️ Modificar en dashboard"], ["Cancelar"]],
+        keyboard: [
+          ["✅ Está bien"],
+          ["✏️ Modificar en dashboard"],
+          ["Cancelar"],
+        ],
       };
     return menu(
       next,
@@ -1476,12 +1671,26 @@ export function handleComplexFlowStep(
       ...collected,
       allow_multiple_programs: allowMultiple,
     };
+    if (
+      collected.guided_creation &&
+      collected.telegram_periods_pending_dashboard
+    )
+      return {
+        flow: "complex_registration_mode",
+        collected: { ...next, allow_individual_periods: false },
+        message:
+          "Como los periodos se configurarán en el dashboard, esa selección queda pendiente. ¿Cómo quieres gestionar las inscripciones?",
+        keyboard: [
+          ["Inscripción directa"],
+          ["Preinscripción y lista de espera"],
+          ["Cancelar"],
+        ],
+      };
     return collected.guided_creation
       ? {
           flow: "guided_period_selection",
           collected: next,
-          message:
-            "¿Las semanas o periodos se pueden elegir individualmente?",
+          message: "¿Las semanas o periodos se pueden elegir individualmente?",
           keyboard: [
             ["Sí, cada semana"],
             ["Solo campus completo"],
@@ -1674,10 +1883,7 @@ Puedes completar la revisión y publicarlo cuando quieras desde el dashboard:
 ${dashboardUrl}
 
 ¿Qué quieres hacer ahora?`,
-      keyboard: [
-        ["Ver dashboard"],
-        ["Crear otro evento", "Mis eventos"],
-      ],
+      keyboard: [["Ver dashboard"], ["Crear otro evento", "Mis eventos"]],
     };
 
   return {
@@ -1692,9 +1898,6 @@ ${dashboardUrl}
 ${registrationUrl}
 
 ¿Qué quieres hacer ahora?`,
-    keyboard: [
-      ["Crear otro evento"],
-      ["Mis eventos", "Ver dashboard"],
-    ],
+    keyboard: [["Crear otro evento"], ["Mis eventos", "Ver dashboard"]],
   };
 }

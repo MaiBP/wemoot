@@ -12,6 +12,7 @@ import {
   pricingPreview,
   requiresDashboardPublication,
   shouldUseComplexFlow,
+  basicEventSummary,
 } from "../lib/telegram/complex-event-flow.ts";
 import { getTelegramImageReference } from "../lib/telegram.ts";
 
@@ -252,6 +253,25 @@ test("inicia el asistente guiado con imágenes", () => {
   assert.deepEqual(result.keyboard?.[0], ["🔎 Analizar imágenes"]);
 });
 
+test("separa la creación básica de la avanzada", () => {
+  const type = handleComplexFlowStep("event_creation_type", "Evento básico", {
+    guided_creation: true,
+  });
+  assert.equal(type.flow, "event_creation_method");
+  assert.equal(type.collected.event_mode, "simple");
+  assert.equal(type.collected.telegram_event_type, "simple");
+
+  const review = handleComplexFlowStep("basic_event_review", "Publicar", {
+    ...baseEvent,
+    price: 50,
+    capacity: 30,
+    event_mode: "simple",
+  });
+  assert.equal(review.flow, "awaiting_confirmation");
+  assert.equal(review.collected.telegram_save_mode, "publish");
+  assert.match(basicEventSummary(review.collected), /Precio final/);
+});
+
 test("guarda la referencia de la imagen sin descargarla ni analizarla", () => {
   const reference = getTelegramImageReference({
     message_id: 10,
@@ -384,11 +404,35 @@ test("el flujo guiado pregunta aforo, inscripción y formulario", () => {
   assert.equal(result.flow, "guided_final_review");
   result = handleComplexFlowStep(
     "guided_final_review",
-    "🚀 Publicar",
+    "👀 Guardar y revisar dashboard",
     result.collected,
   );
   assert.equal(result.flow, "awaiting_confirmation");
-  assert.equal(result.collected.telegram_save_mode, "publish");
+  assert.equal(result.collected.telegram_save_mode, "draft");
+  assert.equal(result.action, "save_draft");
+});
+
+test("genera periodos diarios, mensuales y semanas configurables", () => {
+  const event = {
+    ...collected,
+    start_date: "2026-06-01",
+    end_date: "2026-06-30",
+  };
+  const weekly = handleComplexFlowStep(
+    "guided_period_type",
+    "Semanas de 6 días",
+    event,
+  );
+  assert.equal(weekly.collected.telegram_period_unit, "period_weekly");
+  assert.equal(weekly.collected.telegram_weekly_days, 6);
+  assert.equal(
+    getAdvancedDraft(weekly.collected).periods[0].end_date,
+    "2026-06-06",
+  );
+
+  const monthly = handleComplexFlowStep("guided_period_type", "Meses", event);
+  assert.equal(monthly.collected.telegram_period_unit, "monthly");
+  assert.equal(getAdvancedDraft(monthly.collected).periods.length, 1);
 });
 
 test("configura semanas individuales y descuento de campus completo", () => {
@@ -615,8 +659,8 @@ test("obliga a publicar eventos complejos desde el dashboard", () => {
   assert.equal(result.keyboard, undefined);
 });
 
-test("permite publicar desde Telegram con hasta dos modalidades y periodos", () => {
-  const simple = {
+test("obliga a revisar también los eventos avanzados pequeños", () => {
+  const advanced = {
     ...collected,
     advanced: {
       programs: ["Mañana", "Tarde"].map((name) => ({
@@ -642,7 +686,7 @@ test("permite publicar desde Telegram con hasta dos modalidades y periodos", () 
       uncertainties: [],
     },
   };
-  assert.equal(requiresDashboardPublication(simple), false);
+  assert.equal(requiresDashboardPublication(advanced), true);
 });
 
 test("cierra un evento publicado con enlaces y acciones útiles", () => {
