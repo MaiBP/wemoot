@@ -163,6 +163,7 @@ export function AdvancedEventManager({
                 </Button>
               </div>
               <div className="mt-3 flex flex-wrap gap-2">
+                {program.category && <Badge>{program.category}</Badge>}
                 <Badge>
                   {program.payment_timing === "immediate"
                     ? "Pago inmediato"
@@ -170,8 +171,14 @@ export function AdvancedEventManager({
                       ? "Sólo reserva"
                       : "Pago diferido"}
                 </Badge>
-                {program.min_age && (
-                  <Badge variant="warning">Desde {program.min_age} años</Badge>
+                {(program.min_age || program.max_age) && (
+                  <Badge variant="warning">
+                    {program.min_age && program.max_age
+                      ? `${program.min_age}–${program.max_age} años`
+                      : program.min_age
+                        ? `Desde ${program.min_age} años`
+                        : `Hasta ${program.max_age} años`}
+                  </Badge>
                 )}
               </div>
             </div>

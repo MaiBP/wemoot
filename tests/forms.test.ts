@@ -5,6 +5,118 @@ import {
   validateRequiredAnswers,
   withoutSensitiveAnswers,
 } from "../lib/forms/validate-registration.ts";
+import { eventCreationSchema } from "../lib/validations.ts";
+import { generatePeriods } from "../lib/events/generate-periods.ts";
+
+const baseEvent = {
+  title: "Campus de verano",
+  event_type: "Campus",
+  city: "Barcelona",
+  start_date: "2026-06-22",
+  end_date: "2026-07-31",
+};
+
+test("un evento básico exige precio y plazas", () => {
+  assert.equal(
+    eventCreationSchema.safeParse({
+      ...baseEvent,
+      event_mode: "simple",
+      programs: [],
+      periods: [],
+    }).success,
+    false,
+  );
+});
+
+test("un evento avanzado acepta modalidades y periodos sin precio general", () => {
+  const result = eventCreationSchema.safeParse({
+    ...baseEvent,
+    event_mode: "advanced",
+    programs: [
+      {
+        name: "Perfeccionamiento mañana",
+        category: "Alevín",
+        turn: "morning",
+        start_time: "09:00",
+        end_time: "14:00",
+        min_age: 8,
+        max_age: 11,
+        capacity: 40,
+      },
+    ],
+    periods: [
+      {
+        label: "Semana 1",
+        start_date: "2026-06-22",
+        end_date: "2026-06-26",
+      },
+    ],
+    period_unit: "weekly",
+    initial_prices: [
+      {
+        program_index: 0,
+        member_amount: 60,
+        non_member_amount: 70,
+        full_member_amount: 350,
+        full_non_member_amount: 400,
+      },
+    ],
+  });
+  assert.equal(result.success, true);
+  if (result.success) {
+    assert.equal(result.data.price, undefined);
+    assert.equal(result.data.programs[0]?.capacity, 40);
+    assert.equal(result.data.programs[0]?.category, "Alevín");
+    assert.equal(result.data.programs[0]?.min_age, 8);
+    assert.equal(result.data.programs[0]?.max_age, 11);
+    assert.equal(result.data.initial_prices[0]?.full_member_amount, 350);
+  }
+});
+
+test("genera periodos diarios, semanales y mensuales", () => {
+  assert.equal(
+    generatePeriods("daily", "2026-08-03", "2026-08-05").length,
+    3,
+  );
+  assert.deepEqual(
+    generatePeriods("weekly", "2026-08-03", "2026-08-14").map((period) => [
+      period.start_date,
+      period.end_date,
+    ]),
+    [
+      ["2026-08-03", "2026-08-09"],
+      ["2026-08-10", "2026-08-14"],
+    ],
+  );
+  assert.equal(
+    generatePeriods("monthly", "2026-08-15", "2026-10-02").length,
+    3,
+  );
+});
+
+test("un evento avanzado rechaza un rango de edades invertido", () => {
+  const result = eventCreationSchema.safeParse({
+    ...baseEvent,
+    event_mode: "advanced",
+    programs: [
+      {
+        name: "Tecnificación",
+        turn: "afternoon",
+        min_age: 15,
+        max_age: 10,
+        capacity: 20,
+      },
+    ],
+    periods: [
+      {
+        label: "Semana 1",
+        start_date: "2026-06-22",
+        end_date: "2026-06-26",
+      },
+    ],
+  });
+  assert.equal(result.success, false);
+});
 
 test("rechaza un campo obligatorio vacío", () => {
   const errors = validateRequiredAnswers(

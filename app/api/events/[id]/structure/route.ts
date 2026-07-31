@@ -7,8 +7,10 @@ import {
   eventProgramPeriodSchema,
   eventProgramSchema,
   eventPriceRuleSchema,
+  eventPriceOptionSchema,
 } from "@/lib/validations";
 import { createSlug } from "@/lib/slug";
+import { buildPriceOptionRules } from "@/lib/pricing/price-option";
 
 async function getOwnedEvent(id: string) {
   const supabase = await createClient();
@@ -234,6 +236,79 @@ export async function POST(
       .eq("period_id", parsed.data.period_id)
       .select()
       .single();
+  } else if (body.kind === "price_option") {
+    const parsed = eventPriceOptionSchema.safeParse(body.data);
+    if (!parsed.success)
+      return NextResponse.json(
+        { error: parsed.error.issues[0]?.message ?? "Datos no válidos" },
+        { status: 400 },
+      );
+    const [{ data: program }, { data: periods, error: periodsError }] =
+      await Promise.all([
+        supabase
+          .from("event_programs")
+          .select("id")
+          .eq("id", parsed.data.program_id)
+          .eq("event_id", eventId)
+          .maybeSingle(),
+        supabase
+          .from("event_periods")
+          .select("id,label")
+          .eq("event_id", eventId)
+          .eq("active", true)
+          .order("position"),
+      ]);
+    if (!program)
+      return NextResponse.json(
+        { error: "La modalidad no pertenece al evento" },
+        { status: 400 },
+      );
+    if (periodsError)
+      return NextResponse.json(
+        { error: periodsError.message },
+        { status: 400 },
+      );
+    const periodIds = new Set((periods ?? []).map((period) => period.id));
+    if (parsed.data.period_ids.some((periodId) => !periodIds.has(periodId)))
+      return NextResponse.json(
+        { error: "Una de las semanas no pertenece al evento" },
+        { status: 400 },
+      );
+    const generated = buildPriceOptionRules(parsed.data, periods ?? []);
+    if (!generated.length)
+      return NextResponse.json(
+        { error: "No se generó ninguna tarifa" },
+        { status: 400 },
+      );
+    const saved: unknown[] = [];
+    let saveError: { message: string } | null = null;
+    for (const rule of generated) {
+      const { data: existing } = await supabase
+        .from("event_price_rules")
+        .select("id")
+        .eq("event_id", eventId)
+        .eq("program_id", rule.program_id)
+        .eq("participant_type", rule.participant_type)
+        .eq("label", rule.label)
+        .limit(1)
+        .maybeSingle();
+      const query = existing
+        ? supabase
+            .from("event_price_rules")
+            .update({ ...rule, event_id: eventId })
+            .eq("id", existing.id)
+            .eq("event_id", eventId)
+        : supabase
+            .from("event_price_rules")
+            .insert({ ...rule, event_id: eventId });
+      const { data, error } = await query.select().single();
+      if (error) {
+        saveError = error;
+        break;
+      }
+      saved.push(data);
+    }
+    result = { data: saved, error: saveError };
   } else if (body.kind === "price_rule") {
     const parsed = eventPriceRuleSchema.safeParse(body.data);
     if (!parsed.success)

@@ -218,7 +218,57 @@ export function calculateConfiguredPrice(
   }
   const quantity = periodIds.length;
   const now = input.now ?? new Date();
-  const rule = input.rules
+  const periodRules =
+    input.selectedRuleId == null
+      ? periodIds.flatMap((periodId) => {
+          const periodRule = input.rules
+            .filter(
+              (item) =>
+                item.period_id === periodId &&
+                ruleMatches(
+                  item,
+                  {
+                    ...input,
+                    selectedRuleId: undefined,
+                    periodIds: [periodId],
+                  },
+                  1,
+                  now,
+                ),
+            )
+            .sort(
+              (a, b) =>
+                b.priority - a.priority ||
+                ruleSpecificity(b, input) - ruleSpecificity(a, input),
+            )[0];
+          return periodRule ? [periodRule] : [];
+        })
+      : [];
+  const hasCompletePeriodPricing =
+    periodRules.length === periodIds.length &&
+    new Set(periodRules.map((periodRule) => periodRule.period_id)).size ===
+      periodIds.length;
+  const aggregatedPeriodRule: PriceRuleInput | null =
+    hasCompletePeriodPricing && periodRules[0]
+      ? {
+          ...periodRules[0],
+          id: periodRules.map((periodRule) => periodRule.id).join(","),
+          period_id: null,
+          pricing_type: "fixed",
+          amount:
+            periodRules.reduce(
+              (total, periodRule) => total + eurosToCents(periodRule.amount),
+              0,
+            ) / 100,
+          priority: Math.max(
+            ...periodRules.map((periodRule) => periodRule.priority),
+          ),
+        }
+      : null;
+  const candidateRules = aggregatedPeriodRule
+    ? [aggregatedPeriodRule]
+    : input.rules;
+  const rule = candidateRules
     .filter((item) => ruleMatches(item, { ...input, periodIds }, quantity, now))
     .sort(
       (a, b) =>
@@ -272,6 +322,8 @@ export function calculateConfiguredPrice(
     extras: [],
     finalAmount,
     currency: rule.currency.toUpperCase(),
-    appliedRuleIds: [rule.id],
+    appliedRuleIds: hasCompletePeriodPricing
+      ? periodRules.map((periodRule) => periodRule.id)
+      : [rule.id],
   };
 }

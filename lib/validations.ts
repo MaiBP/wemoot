@@ -1,19 +1,22 @@
 import { z } from "zod";
 
-export const eventSchema = z
-  .object({
-    title: z.string().trim().min(3).max(120),
-    event_type: z.string().trim().min(2).max(50),
-    description: z.string().trim().max(2000).nullable().optional(),
-    city: z.string().trim().min(2).max(100),
-    location: z.string().trim().max(200).nullable().optional(),
-    location_id: z.uuid().nullable().optional(),
-    contact_email: z.email().nullable().optional(),
-    contact_phone: z.string().trim().max(30).nullable().optional(),
-    start_date: z.iso.date(),
-    end_date: z.iso.date(),
-    schedule: z.string().trim().max(200).nullable().optional(),
-    age_range: z.string().trim().max(50).nullable().optional(),
+const eventBaseSchema = z.object({
+  title: z.string().trim().min(3).max(120),
+  event_type: z.string().trim().min(2).max(50),
+  description: z.string().trim().max(2000).nullable().optional(),
+  city: z.string().trim().min(2).max(100),
+  location: z.string().trim().max(200).nullable().optional(),
+  location_id: z.uuid().nullable().optional(),
+  contact_email: z.email().nullable().optional(),
+  contact_phone: z.string().trim().max(30).nullable().optional(),
+  start_date: z.iso.date(),
+  end_date: z.iso.date(),
+  schedule: z.string().trim().max(200).nullable().optional(),
+  age_range: z.string().trim().max(50).nullable().optional(),
+});
+
+export const eventSchema = eventBaseSchema
+  .extend({
     price: z.coerce.number().min(0).max(100000),
     capacity: z.coerce.number().int().positive().max(100000),
   })
@@ -154,6 +157,291 @@ export const eventPeriodSchema = z
     path: ["end_date"],
   });
 
+export const eventCreationSchema = eventBaseSchema
+  .extend({
+    event_mode: z.enum(["simple", "advanced"]).default("simple"),
+    price: z.coerce.number().min(0).max(100000).nullable().optional(),
+    capacity: z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(100000)
+      .nullable()
+      .optional(),
+    period_unit: z
+      .enum(["daily", "weekly", "monthly", "period_weekly"])
+      .default("weekly"),
+    programs: z
+      .array(
+        z
+          .object({
+            name: z.string().trim().min(2).max(120),
+            category: z.string().trim().max(100).nullable().optional(),
+            turn: z
+              .enum(["morning", "afternoon", "full_day", "custom"])
+              .default("custom"),
+            start_time: z
+              .string()
+              .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
+              .nullable()
+              .optional(),
+            end_time: z
+              .string()
+              .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
+              .nullable()
+              .optional(),
+            min_age: z.coerce
+              .number()
+              .int()
+              .min(3)
+              .max(100)
+              .nullable()
+              .optional(),
+            max_age: z.coerce
+              .number()
+              .int()
+              .min(3)
+              .max(100)
+              .nullable()
+              .optional(),
+            capacity: z.coerce.number().int().positive().max(100000),
+            included_items: z
+              .array(z.string().trim().min(1).max(100))
+              .default([]),
+          })
+          .refine(
+            (value) =>
+              value.max_age == null ||
+              value.min_age == null ||
+              value.max_age >= value.min_age,
+            {
+              message: "La edad máxima debe ser mayor que la mínima",
+              path: ["max_age"],
+            },
+          ),
+      )
+      .max(20)
+      .default([]),
+    periods: z
+      .array(
+        z
+          .object({
+            label: z.string().trim().min(2).max(100),
+            start_date: z.iso.date(),
+            end_date: z.iso.date(),
+          })
+          .refine((value) => value.end_date >= value.start_date, {
+            message: "El periodo termina antes de comenzar",
+            path: ["end_date"],
+          }),
+      )
+      .max(52)
+      .default([]),
+    initial_prices: z
+      .array(
+        z
+          .object({
+            program_index: z.coerce.number().int().min(0).max(19),
+            member_amount: z.coerce.number().min(0).max(100000),
+            non_member_amount: z.coerce.number().min(0).max(100000),
+            full_member_amount: z.coerce
+              .number()
+              .min(0)
+              .max(100000)
+              .nullable()
+              .optional(),
+            full_non_member_amount: z.coerce
+              .number()
+              .min(0)
+              .max(100000)
+              .nullable()
+              .optional(),
+          })
+          .refine(
+            (value) =>
+              (value.full_member_amount == null) ===
+              (value.full_non_member_amount == null),
+            {
+              message:
+                "Indica los dos precios de evento completo o deja ambos vacíos",
+              path: ["full_non_member_amount"],
+            },
+          ),
+      )
+      .max(20)
+      .default([]),
+    program_setups: z
+      .array(
+        z
+          .object({
+            program_index: z.coerce.number().int().min(0).max(19),
+            period_unit: z.enum([
+              "daily",
+              "weekly",
+              "monthly",
+              "period_weekly",
+            ]),
+            weekly_days: z.coerce.number().int().min(5).max(7).default(5),
+            sessions_per_period: z.coerce
+              .number()
+              .int()
+              .min(1)
+              .max(20)
+              .default(1),
+            start_date: z.iso.date(),
+            end_date: z.iso.date(),
+            member_amount: z.coerce.number().min(0).max(100000),
+            non_member_amount: z.coerce.number().min(0).max(100000),
+            full_member_amount: z.coerce
+              .number()
+              .min(0)
+              .max(100000)
+              .nullable()
+              .optional(),
+            full_non_member_amount: z.coerce
+              .number()
+              .min(0)
+              .max(100000)
+              .nullable()
+              .optional(),
+            overrides: z
+              .array(
+                z.object({
+                  period_start_date: z.iso.date(),
+                  member_amount: z.coerce.number().min(0).max(100000),
+                  non_member_amount: z.coerce.number().min(0).max(100000),
+                }),
+              )
+              .max(52)
+              .default([]),
+          })
+          .refine((value) => value.end_date >= value.start_date, {
+            message: "El periodo termina antes de comenzar",
+            path: ["end_date"],
+          })
+          .refine(
+            (value) =>
+              (value.full_member_amount == null) ===
+              (value.full_non_member_amount == null),
+            {
+              message:
+                "Indica los dos precios de evento completo o deja ambos vacíos",
+              path: ["full_non_member_amount"],
+            },
+          ),
+      )
+      .max(20)
+      .default([]),
+  })
+  .superRefine((value, context) => {
+    if (value.end_date < value.start_date) {
+      context.addIssue({
+        code: "custom",
+        message: "La fecha final debe ser posterior a la inicial",
+        path: ["end_date"],
+      });
+    }
+    if (value.event_mode === "simple") {
+      if (value.price == null) {
+        context.addIssue({
+          code: "custom",
+          message: "Indica el precio del evento",
+          path: ["price"],
+        });
+      }
+      if (value.capacity == null) {
+        context.addIssue({
+          code: "custom",
+          message: "Indica las plazas del evento",
+          path: ["capacity"],
+        });
+      }
+      return;
+    }
+    if (!value.programs.length) {
+      context.addIssue({
+        code: "custom",
+        message: "Añade al menos una modalidad",
+        path: ["programs"],
+      });
+    }
+    if (!value.periods.length && !value.program_setups.length) {
+      context.addIssue({
+        code: "custom",
+        message: "Añade al menos un periodo",
+        path: ["periods"],
+      });
+    }
+    if (
+      !value.program_setups.length &&
+      value.initial_prices.length !== value.programs.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Configura los precios de cada modalidad",
+        path: ["initial_prices"],
+      });
+    }
+    const configuredPrograms = value.program_setups.length
+      ? value.program_setups
+      : value.initial_prices;
+    const priceIndexes = configuredPrograms.map((price) => price.program_index);
+    if (
+      new Set(priceIndexes).size !== priceIndexes.length ||
+      priceIndexes.some((index) => index >= value.programs.length)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "La configuración de precios no corresponde a las modalidades",
+        path: ["initial_prices"],
+      });
+    }
+    if (
+      value.program_setups.length &&
+      value.program_setups.length !== value.programs.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Configura periodos y precios para cada modalidad",
+        path: ["program_setups"],
+      });
+    }
+    const programNames = value.programs.map((program) =>
+      program.name.toLocaleLowerCase("es"),
+    );
+    if (new Set(programNames).size !== programNames.length) {
+      context.addIssue({
+        code: "custom",
+        message: "No puedes repetir el nombre de una modalidad",
+        path: ["programs"],
+      });
+    }
+    for (const [index, period] of value.periods.entries()) {
+      if (
+        period.start_date < value.start_date ||
+        period.end_date > value.end_date
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Los periodos deben estar dentro de las fechas del evento",
+          path: ["periods", index],
+        });
+      }
+    }
+    for (const [index, setup] of value.program_setups.entries()) {
+      if (
+        setup.start_date < value.start_date ||
+        setup.end_date > value.end_date
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Las fechas de cada modalidad deben estar dentro del evento",
+          path: ["program_setups", index],
+        });
+      }
+    }
+  });
+
 export const eventPriceSchema = z.object({
   id: z.uuid().optional(),
   program_id: z.uuid(),
@@ -242,6 +530,46 @@ export const eventPriceRuleSchema = z
       value.starts_at == null ||
       Date.parse(value.ends_at) >= Date.parse(value.starts_at),
     { message: "La regla termina antes de comenzar", path: ["ends_at"] },
+  );
+
+export const eventPriceOptionSchema = z
+  .object({
+    option_type: z.enum([
+      "individual_periods",
+      "full_event",
+      "weekly_sessions",
+      "full_sessions",
+      "single_event",
+    ]),
+    program_id: z.uuid(),
+    period_ids: z.array(z.uuid()).max(52).default([]),
+    sessions_per_week: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(7)
+      .nullable()
+      .optional(),
+    member_amount: z.coerce.number().min(0).max(100000),
+    non_member_amount: z.coerce.number().min(0).max(100000),
+    currency: z.string().trim().length(3).default("EUR"),
+  })
+  .refine(
+    (value) =>
+      value.option_type !== "individual_periods" || value.period_ids.length > 0,
+    {
+      message: "Selecciona al menos una semana",
+      path: ["period_ids"],
+    },
+  )
+  .refine(
+    (value) =>
+      !["weekly_sessions", "full_sessions"].includes(value.option_type) ||
+      value.sessions_per_week != null,
+    {
+      message: "Indica cuántas sesiones incluye el pack",
+      path: ["sessions_per_week"],
+    },
   );
 
 export const eventDiscountSchema = z

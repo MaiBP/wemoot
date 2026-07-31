@@ -11,6 +11,10 @@ import {
   getSelectablePriceRules,
   getSelectablePriceScope,
 } from "../lib/pricing/package-options.ts";
+import {
+  buildPriceOptionRules,
+  priceOptionName,
+} from "../lib/pricing/price-option.ts";
 import type { EventPeriod, EventPriceRule } from "../types/event.ts";
 
 const rules: PriceRuleInput[] = [
@@ -169,6 +173,71 @@ test("sólo muestra los packs del tipo de participante elegido", () => {
       (item) => item.id,
     ),
     ["club"],
+  );
+});
+
+test("el asistente crea Campus completo como tarifa y no como periodo", () => {
+  const periods = [1, 2, 3, 4, 5, 6].map((position) => ({
+    id: `period-${position}`,
+    label: `Semana ${position}`,
+  }));
+  const input = {
+    option_type: "full_event" as const,
+    program_id: "program-1",
+    period_ids: [],
+    sessions_per_week: null,
+    member_amount: 350,
+    non_member_amount: 400,
+    currency: "EUR",
+  };
+  const generated = buildPriceOptionRules(input, periods);
+  assert.equal(priceOptionName(input, periods.length), "Campus completo");
+  assert.equal(generated.length, 2);
+  assert.deepEqual(
+    generated.map((rule) => ({
+      participant: rule.participant_type,
+      amount: rule.amount,
+      type: rule.pricing_type,
+      period: rule.period_id,
+    })),
+    [
+      {
+        participant: "member",
+        amount: 350,
+        type: "full_event",
+        period: null,
+      },
+      {
+        participant: "non_member",
+        amount: 400,
+        type: "full_event",
+        period: null,
+      },
+    ],
+  );
+});
+
+test("el asistente crea precios para varias semanas sin sumarlas como campus", () => {
+  const periods = [
+    { id: "week-1", label: "Semana 1" },
+    { id: "week-2", label: "Semana 2" },
+  ];
+  const generated = buildPriceOptionRules(
+    {
+      option_type: "individual_periods",
+      program_id: "program-1",
+      period_ids: ["week-1", "week-2"],
+      sessions_per_week: null,
+      member_amount: 70,
+      non_member_amount: 80,
+      currency: "EUR",
+    },
+    periods,
+  );
+  assert.equal(generated.length, 4);
+  assert.deepEqual(
+    generated.map((rule) => rule.period_id),
+    ["week-1", "week-1", "week-2", "week-2"],
   );
 });
 

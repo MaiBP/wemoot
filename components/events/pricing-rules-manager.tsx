@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PricingOptionsWizard } from "@/components/events/pricing-options-wizard";
 
 const participantNames: Record<string, string> = {
   general: "General",
@@ -130,7 +131,22 @@ export function PricingRulesManager({
         <p className="rounded-xl bg-brand-magenta/10 p-3 text-sm">{error}</p>
       )}
 
-      <section>
+      <PricingOptionsWizard
+        eventId={eventId}
+        programs={programs}
+        periods={periods}
+        rules={rules}
+      />
+
+      <details className="rounded-2xl border p-4">
+        <summary className="cursor-pointer font-semibold">
+          Configuración avanzada
+        </summary>
+        <p className="mt-2 text-sm text-brand-black/50">
+          Edita reglas técnicas, prioridades y descuentos únicamente cuando
+          necesites una configuración especial.
+        </p>
+        <section className="mt-6">
         <div className="mb-3 flex items-center justify-between gap-4">
           <div>
             <h3 className="font-semibold">Reglas de precio</h3>
@@ -402,9 +418,9 @@ export function PricingRulesManager({
             </div>
           </form>
         )}
-      </section>
+        </section>
 
-      <section>
+        <section className="mt-8">
         <div className="mb-3 flex items-center justify-between gap-4">
           <div>
             <h3 className="font-semibold">Descuentos</h3>
@@ -529,7 +545,8 @@ export function PricingRulesManager({
             </div>
           </form>
         )}
-      </section>
+        </section>
+      </details>
     </div>
   );
 }

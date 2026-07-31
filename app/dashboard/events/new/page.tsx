@@ -11,11 +11,12 @@ export default async function NewEventPage() {
   const status = user ? await getOnboardingStatus(supabase, user.id) : null;
   const defaults = status ? buildEventDefaults(status) : null;
   return (
-    <div className="mx-auto max-w-3xl">
+    <div className="mx-auto max-w-5xl">
       <header className="mb-7">
         <h1 className="text-3xl font-bold tracking-tight">Nuevo evento</h1>
         <p className="mt-1 text-brand-black/60">
-          Crea un borrador manualmente como alternativa al asistente.
+          Crea un evento básico o configura manualmente la estructura inicial
+          de un evento avanzado.
         </p>
       </header>
       <Card>
